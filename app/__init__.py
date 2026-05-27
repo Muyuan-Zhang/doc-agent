@@ -3,6 +3,7 @@ import logging
 
 from fastapi import FastAPI
 
+from app.clients.llm import OpenAILLMClient
 from app.clients.milvus import MilvusClient
 from app.clients.mq import RedisStreamsMQClient
 from app.clients.postgresql import PostgreSQLClient
@@ -12,6 +13,7 @@ from app.core.logging_config import setup_logging
 from app.middleware.registry import register_middlewares
 from app.routers.agent import router as agent_router
 from app.routers.health import router as health_router
+from app.routers.knowledge_base import router as kb_router
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,7 @@ async def _lifespan(app: FastAPI):
         ("redis",    RedisClient()),
         ("milvus",   MilvusClient()),
         ("mq",       RedisStreamsMQClient()),
+        ("llm",      OpenAILLMClient()),
     ]
 
     connected: list = []
@@ -59,4 +62,5 @@ def create_app() -> FastAPI:
     register_exception_handlers(app)
     app.include_router(health_router)
     app.include_router(agent_router)
+    app.include_router(kb_router)
     return app

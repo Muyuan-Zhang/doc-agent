@@ -31,6 +31,7 @@ async def readiness(request: Request) -> JSONResponse:
         check("redis",    state.redis),
         check("milvus",   state.milvus),
         check("mq",       state.mq),
+        check("llm",      state.llm),
     )
 
     checks = dict(results)

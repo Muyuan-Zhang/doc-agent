@@ -12,13 +12,14 @@ def _make_client(ping_ok: bool = True) -> AsyncMock:
     return m
 
 
-async def _get_app_with_state(postgres_ok=True, redis_ok=True, milvus_ok=True, mq_ok=True):
+async def _get_app_with_state(postgres_ok=True, redis_ok=True, milvus_ok=True, mq_ok=True, llm_ok=True):
     from app import create_app
     app = create_app()
     app.state.postgres = _make_client(postgres_ok)
     app.state.redis = _make_client(redis_ok)
     app.state.milvus = _make_client(milvus_ok)
     app.state.mq = _make_client(mq_ok)
+    app.state.llm = _make_client(llm_ok)
     return app
 
 
@@ -63,7 +64,7 @@ class TestReadinessAllHealthy:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.get("/health/ready")
         checks = response.json()["checks"]
-        assert checks == {"postgres": "ok", "redis": "ok", "milvus": "ok", "mq": "ok"}
+        assert checks == {"postgres": "ok", "redis": "ok", "milvus": "ok", "mq": "ok", "llm": "ok"}
 
     async def test_all_healthy_body_contains_kb_version(self):
         app = await _get_app_with_state()
@@ -73,7 +74,7 @@ class TestReadinessAllHealthy:
 
 
 class TestReadinessSingleClientFailure:
-    @pytest.mark.parametrize("failing_client", ["postgres", "redis", "milvus", "mq"])
+    @pytest.mark.parametrize("failing_client", ["postgres", "redis", "milvus", "mq", "llm"])
     async def test_single_client_ping_false_returns_503(self, failing_client: str):
         kwargs = {f"{failing_client}_ok": False}
         app = await _get_app_with_state(**kwargs)
@@ -81,7 +82,7 @@ class TestReadinessSingleClientFailure:
             response = await client.get("/health/ready")
         assert response.status_code == 503
 
-    @pytest.mark.parametrize("failing_client", ["postgres", "redis", "milvus", "mq"])
+    @pytest.mark.parametrize("failing_client", ["postgres", "redis", "milvus", "mq", "llm"])
     async def test_single_client_ping_false_status_is_degraded(self, failing_client: str):
         kwargs = {f"{failing_client}_ok": False}
         app = await _get_app_with_state(**kwargs)
@@ -89,7 +90,7 @@ class TestReadinessSingleClientFailure:
             response = await client.get("/health/ready")
         assert response.json()["status"] == "degraded"
 
-    @pytest.mark.parametrize("failing_client", ["postgres", "redis", "milvus", "mq"])
+    @pytest.mark.parametrize("failing_client", ["postgres", "redis", "milvus", "mq", "llm"])
     async def test_single_client_ping_false_names_failing_check(self, failing_client: str):
         kwargs = {f"{failing_client}_ok": False}
         app = await _get_app_with_state(**kwargs)
@@ -97,7 +98,7 @@ class TestReadinessSingleClientFailure:
             response = await client.get("/health/ready")
         assert response.json()["checks"][failing_client].startswith("error:")
 
-    @pytest.mark.parametrize("failing_client", ["postgres", "redis", "milvus", "mq"])
+    @pytest.mark.parametrize("failing_client", ["postgres", "redis", "milvus", "mq", "llm"])
     async def test_single_client_ping_false_other_checks_still_ok(self, failing_client: str):
         kwargs = {f"{failing_client}_ok": False}
         app = await _get_app_with_state(**kwargs)
@@ -111,7 +112,7 @@ class TestReadinessSingleClientFailure:
 class TestReadinessAllFailing:
     async def test_all_failing_returns_503(self):
         app = await _get_app_with_state(
-            postgres_ok=False, redis_ok=False, milvus_ok=False, mq_ok=False
+            postgres_ok=False, redis_ok=False, milvus_ok=False, mq_ok=False, llm_ok=False
         )
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.get("/health/ready")
@@ -119,7 +120,7 @@ class TestReadinessAllFailing:
 
     async def test_all_failing_status_is_degraded(self):
         app = await _get_app_with_state(
-            postgres_ok=False, redis_ok=False, milvus_ok=False, mq_ok=False
+            postgres_ok=False, redis_ok=False, milvus_ok=False, mq_ok=False, llm_ok=False
         )
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.get("/health/ready")
@@ -127,7 +128,7 @@ class TestReadinessAllFailing:
 
     async def test_all_failing_all_checks_are_errors(self):
         app = await _get_app_with_state(
-            postgres_ok=False, redis_ok=False, milvus_ok=False, mq_ok=False
+            postgres_ok=False, redis_ok=False, milvus_ok=False, mq_ok=False, llm_ok=False
         )
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.get("/health/ready")
@@ -144,6 +145,7 @@ class TestReadinessPingException:
         app.state.redis = _make_client(True)
         app.state.milvus = _make_client(True)
         app.state.mq = _make_client(True)
+        app.state.llm = _make_client(True)
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.get("/health/ready")
@@ -157,6 +159,7 @@ class TestReadinessPingException:
         app.state.redis = _make_client(True)
         app.state.milvus = _make_client(True)
         app.state.mq = _make_client(True)
+        app.state.llm = _make_client(True)
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.get("/health/ready")

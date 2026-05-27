@@ -36,6 +36,17 @@ class Settings(BaseSettings):
     # Knowledge base — version prefix included in all cache keys
     knowledge_base_version: str = "v1"
 
+    # Document ingestion chunking
+    chunk_size: int = 512
+    chunk_overlap: int = 64
+    embedding_dim: int = 1536
+    embedding_batch_size: int = 100
+    milvus_kb_collection: str = "knowledge_base"
+
+    # LLM / Embedding
+    openai_api_key: str = ""
+    openai_embedding_model: str = "text-embedding-3-small"
+
     # LLM concurrency: three independent semaphore buckets
     llm_semaphore_limits: LLMSemaphoreLimits = LLMSemaphoreLimits()
 

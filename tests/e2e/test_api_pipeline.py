@@ -27,13 +27,14 @@ def _make_ping(ok: bool = True) -> AsyncMock:
     return m
 
 
-def _app(*, postgres=True, redis=True, milvus=True, mq=True):
+def _app(*, postgres=True, redis=True, milvus=True, mq=True, llm=True):
     from app import create_app
     app = create_app()
     app.state.postgres = _make_ping(postgres)
     app.state.redis = _make_ping(redis)
     app.state.milvus = _make_ping(milvus)
     app.state.mq = _make_ping(mq)
+    app.state.llm = _make_ping(llm)
     return app
 
 
@@ -195,7 +196,7 @@ class TestReadinessPipeline:
         assert r.json()["checks"]["milvus"].startswith("error:")
         assert all(
             r.json()["checks"][n] == "ok"
-            for n in ("postgres", "redis", "mq")
+            for n in ("postgres", "redis", "mq", "llm")
         )
 
     async def test_exc_in_ping_returns_503_with_safe_message(self):
