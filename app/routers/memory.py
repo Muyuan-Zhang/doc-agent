@@ -1,7 +1,9 @@
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Query, Request, status
+
+from fastapi import APIRouter, HTTPException, Query, Request, status
+
 from pydantic import BaseModel
 
 from app.memory.schemas import MemoryContext, MemorySummary, StaticFact
@@ -24,12 +26,15 @@ class AddFactRequest(BaseModel):
 
 
 def _svc(request: Request) -> MemoryService:
-    return MemoryService(
-        pg=request.app.state.postgres,
-        redis=request.app.state.redis,
-        milvus=request.app.state.milvus,
-        llm=request.app.state.llm,
-    )
+    try:
+        return MemoryService(
+            pg=request.app.state.postgres,
+            redis=request.app.state.redis,
+            milvus=request.app.state.milvus,
+            llm=request.app.state.llm,
+        )
+    except AttributeError as exc:
+        raise HTTPException(status_code=503, detail="Service dependencies not ready") from exc
 
 
 @router.post("/turns", status_code=status.HTTP_204_NO_CONTENT)

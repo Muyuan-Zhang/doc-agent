@@ -1,218 +1,253 @@
-"""E2E tests for M5 memory pipeline via FastAPI ASGI."""
-from unittest.mock import AsyncMock, MagicMock, patch
+"""E2E tests for M5 memory pipeline via FastAPI ASGI.
 
+Uses shared fixtures from conftest.py — no lifespan patching needed.
+The memory router reads only from app.state.*, so direct state injection
+is sufficient to exercise the full middleware → router → service stack.
+"""
+import json
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app import create_app
+
+from tests.e2e.conftest import make_app, make_llm_mock, make_pg_mock, make_redis_mock, make_milvus_mock
+from app.core.exceptions import NotFoundError
 
 
-def _make_state():
-    pg = MagicMock()
-    redis = MagicMock()
-    milvus = MagicMock()
-    llm = MagicMock()
-    mq = MagicMock()
-    return pg, redis, milvus, llm, mq
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _app_with_memory():
+    redis = make_redis_mock()
+    pg = make_pg_mock()
+    milvus = make_milvus_mock()
+    llm = make_llm_mock()
+    return make_app(redis=redis, postgres=pg, milvus=milvus, llm=llm), redis, pg, milvus, llm
 
 
-@pytest.fixture
-def app_with_memory(monkeypatch):
-    """FastAPI app with all clients pre-patched so no real infra is needed."""
-    pg, redis, milvus, llm, mq = _make_state()
-
-    with (
-        patch("app.PostgreSQLClient") as MockPG,
-        patch("app.RedisClient") as MockRedis,
-        patch("app.MilvusClient") as MockMilvus,
-        patch("app.RedisStreamsMQClient") as MockMQ,
-        patch("app.OpenAILLMClient") as MockLLM,
-    ):
-        pg_inst = MagicMock()
-        pg_inst.connect = AsyncMock()
-        pg_inst.disconnect = AsyncMock()
-        redis_inst = MagicMock()
-        redis_inst.connect = AsyncMock()
-        redis_inst.disconnect = AsyncMock()
-        milvus_inst = MagicMock()
-        milvus_inst.connect = AsyncMock()
-        milvus_inst.disconnect = AsyncMock()
-        mq_inst = MagicMock()
-        mq_inst.connect = AsyncMock()
-        mq_inst.disconnect = AsyncMock()
-        llm_inst = MagicMock()
-        llm_inst.connect = AsyncMock()
-        llm_inst.disconnect = AsyncMock()
-        llm_inst.complete = AsyncMock(return_value="Summarized conversation.")
-        llm_inst.embed = AsyncMock(return_value=[0.1] * 10)
-
-        MockPG.return_value = pg_inst
-        MockRedis.return_value = redis_inst
-        MockMilvus.return_value = milvus_inst
-        MockMQ.return_value = mq_inst
-        MockLLM.return_value = llm_inst
-
-        app = create_app()
-        app.state.postgres = pg_inst
-        app.state.redis = redis_inst
-        app.state.milvus = milvus_inst
-        app.state.mq = mq_inst
-        app.state.llm = llm_inst
-
-        yield app, redis_inst, pg_inst, milvus_inst, llm_inst
+def _turn_json(content: str = "Hello") -> str:
+    from app.memory.schemas import ConversationTurn
+    return ConversationTurn(
+        session_id="sess-1", role="user", content=content, ts=1000.0
+    ).model_dump_json()
 
 
-@pytest.fixture
-async def client(app_with_memory):
-    app, *_ = app_with_memory
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-        yield c, app_with_memory
+# ---------------------------------------------------------------------------
+# Middleware — x-request-id must propagate on all memory endpoints
+# ---------------------------------------------------------------------------
+
+class TestMemoryMiddleware:
+    async def test_request_id_on_append_turn(self):
+        app, redis, *_ = _app_with_memory()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post("/memory/turns", json={
+                "session_id": "s1", "user_id": "u1", "role": "user", "content": "hi"
+            })
+        assert "x-request-id" in r.headers
+
+    async def test_request_id_on_get_context(self):
+        app, redis, pg, *_ = _app_with_memory()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.get("/memory/context/s1", params={"user_id": "u1"})
+        assert "x-request-id" in r.headers
+
+    async def test_503_when_state_missing_on_memory(self):
+        from app import create_app
+        app = create_app()  # no state set
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post("/memory/turns", json={
+                "session_id": "s1", "user_id": "u1", "role": "user", "content": "hi"
+            })
+        assert r.status_code in (500, 503)
 
 
-def _patch_recent_store(redis_inst, llen_val: int = 1, lrange_val: list | None = None):
-    redis_inst.client = MagicMock()
-    redis_inst.client.rpush = AsyncMock(return_value=llen_val)
-    redis_inst.client.ltrim = AsyncMock()
-    redis_inst.client.llen = AsyncMock(return_value=llen_val)
-    redis_inst.client.lrange = AsyncMock(return_value=lrange_val or [])
-    redis_inst.client.expire = AsyncMock()
-    redis_inst.client.delete = AsyncMock()
-    redis_inst.cache_key = MagicMock(return_value="v1:memory:recent:sess-1")
-
-
-def _patch_pg_summary(pg_inst, fetchone=None):
-    mock_conn = AsyncMock()
-    mock_result = MagicMock()
-    mock_result.fetchone = MagicMock(return_value=fetchone)
-    mock_result.rowcount = 1
-    mock_conn.execute = AsyncMock(return_value=mock_result)
-    ctx = AsyncMock()
-    ctx.__aenter__ = AsyncMock(return_value=mock_conn)
-    ctx.__aexit__ = AsyncMock(return_value=None)
-    pg_inst.engine = MagicMock()
-    pg_inst.engine.begin = MagicMock(return_value=ctx)
-    pg_inst.engine.connect = MagicMock(return_value=ctx)
-    return mock_conn
-
-
-def _patch_milvus_memory(milvus_inst, search_hits: list | None = None):
-    milvus_inst.memory_insert = AsyncMock()
-    milvus_inst.memory_search = AsyncMock(return_value=search_hits or [])
-    milvus_inst.memory_delete = AsyncMock()
-
+# ---------------------------------------------------------------------------
+# POST /memory/turns
+# ---------------------------------------------------------------------------
 
 class TestAppendTurnEndpoint:
-    async def test_returns_204(self, client):
-        c, (app, redis, pg, milvus, llm) = client
-        _patch_recent_store(redis, llen_val=1)
-        resp = await c.post("/memory/turns", json={
-            "session_id": "sess-1",
-            "user_id": "user-1",
-            "role": "user",
-            "content": "Hello world",
-        })
-        assert resp.status_code == 204
+    async def test_returns_204(self):
+        app, *_ = _app_with_memory()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post("/memory/turns", json={
+                "session_id": "sess-1", "user_id": "user-1",
+                "role": "user", "content": "Hello world",
+            })
+        assert r.status_code == 204
 
-    async def test_invalid_body_returns_422(self, client):
-        c, _ = client
-        resp = await c.post("/memory/turns", json={"session_id": "sess-1"})
-        assert resp.status_code == 422
+    async def test_invalid_body_returns_422(self):
+        app, *_ = _app_with_memory()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post("/memory/turns", json={"session_id": "s1"})
+        assert r.status_code == 422
 
+    async def test_missing_body_returns_422(self):
+        app, *_ = _app_with_memory()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post("/memory/turns")
+        assert r.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# GET /memory/context/{session_id}
+# ---------------------------------------------------------------------------
 
 class TestGetContextEndpoint:
-    async def test_returns_200_with_context(self, client):
-        c, (app, redis, pg, milvus, llm) = client
-        _patch_recent_store(redis, lrange_val=[])
-        _patch_pg_summary(pg, fetchone=None)
-        resp = await c.get("/memory/context/sess-1", params={"user_id": "user-1"})
-        assert resp.status_code == 200
-        body = resp.json()
-        assert "turns" in body
-        assert "static_facts" in body
-
-    async def test_empty_context_when_no_history(self, client):
-        c, (app, redis, pg, milvus, llm) = client
-        _patch_recent_store(redis, lrange_val=[])
-        _patch_pg_summary(pg, fetchone=None)
-        resp = await c.get("/memory/context/sess-1", params={"user_id": "user-1"})
-        body = resp.json()
+    async def test_returns_200_with_empty_context(self):
+        app, *_ = _app_with_memory()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.get("/memory/context/sess-1", params={"user_id": "user-1"})
+        assert r.status_code == 200
+        body = r.json()
         assert body["turns"] == []
         assert body["summary"] is None
         assert body["static_facts"] == []
 
-    async def test_missing_user_id_returns_422(self, client):
-        c, _ = client
-        resp = await c.get("/memory/context/sess-1")
-        assert resp.status_code == 422
 
+    async def test_returns_turns_from_redis(self):
+        app, redis, *_ = _app_with_memory()
+        redis.client.lrange = __import__("unittest.mock", fromlist=["AsyncMock"]).AsyncMock(
+            return_value=[_turn_json("hi there")]
+        )
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.get("/memory/context/sess-1", params={"user_id": "user-1"})
+        assert r.status_code == 200
+        assert len(r.json()["turns"]) == 1
+        assert r.json()["turns"][0]["content"] == "hi there"
+
+    async def test_missing_user_id_returns_422(self):
+        app, *_ = _app_with_memory()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.get("/memory/context/sess-1")
+        assert r.status_code == 422
+
+    async def test_summary_included_when_pg_has_row(self):
+        row = ("sum-1", "user-1", "sess-1", "Prior context.", "a" * 64)
+        pg = make_pg_mock(fetchone=row)
+        app = make_app(postgres=pg)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.get("/memory/context/sess-1", params={"user_id": "user-1"})
+        assert r.status_code == 200
+        assert r.json()["summary"]["summary_text"] == "Prior context."
+
+
+# ---------------------------------------------------------------------------
+# POST /memory/summarize/{session_id}
+# ---------------------------------------------------------------------------
 
 class TestSummarizeEndpoint:
-    async def test_returns_200_with_summary(self, client):
-        c, (app, redis, pg, milvus, llm) = client
-        _patch_recent_store(redis, lrange_val=[])
-        conn = _patch_pg_summary(pg)
-        resp = await c.post("/memory/summarize/sess-1", params={"user_id": "user-1"})
-        assert resp.status_code == 200
-        body = resp.json()
+    async def test_returns_200_with_summary(self):
+        app, redis, pg, milvus, llm = _app_with_memory()
+        llm.complete = __import__("unittest.mock", fromlist=["AsyncMock"]).AsyncMock(
+            return_value="Key decisions: A and B."
+        )
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post("/memory/summarize/sess-1", params={"user_id": "user-1"})
+        assert r.status_code == 200
+        body = r.json()
         assert "summary_id" in body
-        assert "summary_text" in body
+        assert body["summary_text"] == "Key decisions: A and B."
+        assert body["user_id"] == "user-1"
+        assert body["session_id"] == "sess-1"
 
-    async def test_summary_text_from_llm(self, client):
-        c, (app, redis, pg, milvus, llm) = client
-        llm.complete = AsyncMock(return_value="Key points: A, B, C.")
-        _patch_recent_store(redis, lrange_val=[])
-        _patch_pg_summary(pg)
-        resp = await c.post("/memory/summarize/sess-1", params={"user_id": "user-1"})
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["summary_text"] == "Key points: A, B, C."
+    async def test_missing_user_id_returns_422(self):
+        app, *_ = _app_with_memory()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post("/memory/summarize/sess-1")
+        assert r.status_code == 422
 
 
-class TestStaticFactEndpoints:
-    async def test_add_fact_returns_201(self, client):
-        c, (app, redis, pg, milvus, llm) = client
-        _patch_pg_summary(pg)
-        _patch_milvus_memory(milvus)
-        resp = await c.post("/memory/static", json={
-            "user_id": "user-1",
-            "content": "I prefer Python over Java.",
-        })
-        assert resp.status_code == 201
-        body = resp.json()
+# ---------------------------------------------------------------------------
+# POST /memory/static
+# ---------------------------------------------------------------------------
+
+class TestAddStaticFactEndpoint:
+    async def test_returns_201_with_fact(self):
+        app, *_ = _app_with_memory()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post("/memory/static", json={
+                "user_id": "user-1",
+                "content": "I prefer Python over Java.",
+            })
+        assert r.status_code == 201
+        body = r.json()
         assert body["content"] == "I prefer Python over Java."
+        assert body["user_id"] == "user-1"
         assert "fact_id" in body
+        assert "content_hash" in body
 
-    async def test_add_fact_missing_content_returns_422(self, client):
-        c, _ = client
-        resp = await c.post("/memory/static", json={"user_id": "user-1"})
-        assert resp.status_code == 422
+    async def test_missing_content_returns_422(self):
+        app, *_ = _app_with_memory()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post("/memory/static", json={"user_id": "user-1"})
+        assert r.status_code == 422
 
-    async def test_delete_fact_returns_204(self, client):
-        c, (app, redis, pg, milvus, llm) = client
-        conn = _patch_pg_summary(pg)
-        _patch_milvus_memory(milvus)
-        resp = await c.delete("/memory/static/fact-1", params={"user_id": "user-1"})
-        assert resp.status_code == 204
+    async def test_missing_user_id_returns_422(self):
+        app, *_ = _app_with_memory()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post("/memory/static", json={"content": "some fact"})
+        assert r.status_code == 422
 
+
+# ---------------------------------------------------------------------------
+# DELETE /memory/static/{fact_id}
+# ---------------------------------------------------------------------------
+
+class TestDeleteStaticFactEndpoint:
+    async def test_returns_204_on_success(self):
+        app, redis, pg, milvus, llm = _app_with_memory()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.delete("/memory/static/fact-1", params={"user_id": "user-1"})
+        assert r.status_code == 204
+
+    async def test_returns_404_when_fact_missing(self):
+        pg = make_pg_mock(rowcount=0)
+        app = make_app(postgres=pg)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.delete("/memory/static/missing-fact", params={"user_id": "user-1"})
+        assert r.status_code == 404
+
+    async def test_missing_user_id_returns_422(self):
+        app, *_ = _app_with_memory()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.delete("/memory/static/fact-1")
+        assert r.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Full pipeline — append → retrieve
+# ---------------------------------------------------------------------------
 
 class TestFullPipeline:
-    async def test_append_then_retrieve_context(self, client):
-        """Full flow: append turn → retrieve context shows turns."""
-        import json as _json
-        c, (app, redis, pg, milvus, llm) = client
+    async def test_append_then_retrieve_shows_turn(self):
+        app, redis, pg, *_ = _app_with_memory()
+        turn_raw = _turn_json("hello pipeline")
+        redis.client.lrange = __import__("unittest.mock", fromlist=["AsyncMock"]).AsyncMock(
+            return_value=[turn_raw]
+        )
 
-        turn_json = '{"session_id":"sess-1","role":"user","content":"Hello","ts":1000.0}'
-        _patch_recent_store(redis, llen_val=1, lrange_val=[turn_json])
-        _patch_pg_summary(pg, fetchone=None)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            post_r = await c.post("/memory/turns", json={
+                "session_id": "sess-1", "user_id": "user-1",
+                "role": "user", "content": "hello pipeline",
+            })
+            assert post_r.status_code == 204
 
-        resp = await c.post("/memory/turns", json={
-            "session_id": "sess-1", "user_id": "user-1",
-            "role": "user", "content": "Hello",
-        })
-        assert resp.status_code == 204
-
-        resp = await c.get("/memory/context/sess-1", params={"user_id": "user-1"})
-        assert resp.status_code == 200
-        body = resp.json()
+            get_r = await c.get("/memory/context/sess-1", params={"user_id": "user-1"})
+        assert get_r.status_code == 200
+        body = get_r.json()
         assert len(body["turns"]) == 1
-        assert body["turns"][0]["content"] == "Hello"
+        assert body["turns"][0]["content"] == "hello pipeline"
+
+    async def test_add_fact_then_present_in_milvus(self):
+        app, redis, pg, milvus, llm = _app_with_memory()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post("/memory/static", json={
+                "user_id": "user-1",
+                "content": "Prefers concise answers.",
+            })
+        assert r.status_code == 201
+        milvus.memory_insert.assert_awaited_once()
+        entity = milvus.memory_insert.call_args[0][0][0]
+        assert entity["content"] == "Prefers concise answers."
+        assert entity["user_id"] == "user-1"

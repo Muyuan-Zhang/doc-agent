@@ -16,8 +16,8 @@
       "Read(//mnt/**)",
       "Bash(ls /mnt/)",
       "Read(//k//**)",
-      "Bash(python3 *)",
-      "Bash(python *)",
+      "Bash(python -m pytest *)",
+      "Bash(python3 -m pytest *)",
       "Bash(pip install *)",
       "Bash(dir app *)",
       "Bash(git add *)",
@@ -27,7 +27,22 @@
       "Bash(npx ecc-agentshield *)",
       "PowerShell(New-Item *)",
       "Bash(Get-ChildItem -Path \"K:\\\\postgraduate\\\\doc-agent\" -Depth 1 -File)",
-      "Bash(Select-Object Name)"
+      "Bash(Select-Object Name)",
+      "Bash(Get-ChildItem -Path \"K:\\\\postgraduate\\\\doc-agent\" -Force)",
+      "Bash(Select-Object Name, PSIsContainer)"
+    ],
+    "deny": [
+      "Bash(rm -rf *)",
+      "Bash(git push --force *)",
+      "Bash(git push -f *)",
+      "Bash(git reset --hard *)",
+      "Bash(chmod -R 777 *)",
+      "Bash(chmod 777 *)",
+      "Bash(sudo *)",
+      "Bash(ssh *)",
+      "Bash(* > /dev/*)",
+      "Bash(* | bash)",
+      "Bash(* | sh)"
     ]
   }
 }
