@@ -8,6 +8,10 @@ _SENTENCE_ENDS = (".", "?", "!", "\n")
 
 class DocumentChunker:
     def __init__(self, chunk_size: int, chunk_overlap: int) -> None:
+        if chunk_overlap >= chunk_size:
+            raise ValueError(
+                f"chunk_overlap ({chunk_overlap}) must be less than chunk_size ({chunk_size})"
+            )
         self._chunk_size = chunk_size
         self._chunk_overlap = chunk_overlap
 

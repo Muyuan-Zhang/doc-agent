@@ -1,0 +1,33 @@
+{
+  "env": {
+    "ECC_DISABLED_HOOKS": "pre:edit-write:gateguard-fact-force"
+  },
+  "permissions": {
+    "allow": [
+      "Skill(update-config)",
+      "Bash(dir \"K:\\\\postgraduate\\\\doc-agent\\\\app\")",
+      "Bash(dir \"K:\\\\postgraduate\\\\doc-agent\\\\app\\\\clients\")",
+      "Bash(dir \"K:\\\\postgraduate\\\\doc-agent\")",
+      "Bash(dir \"K:\\\\postgraduate\\\\doc-agent\\\\tests\")",
+      "Bash(python -c \"import app; print\\(app\\)\")",
+      "Bash(cmd *)",
+      "Bash(Get-ChildItem -Path \"K:\\\\postgraduate\\\\doc-agent\" -Recurse -Filter \"*.py\")",
+      "Bash(Select-Object FullName)",
+      "Read(//mnt/**)",
+      "Bash(ls /mnt/)",
+      "Read(//k//**)",
+      "Bash(python3 *)",
+      "Bash(python *)",
+      "Bash(pip install *)",
+      "Bash(dir app *)",
+      "Bash(git add *)",
+      "Bash(git rm *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git restore *)",
+      "Bash(npx ecc-agentshield *)",
+      "PowerShell(New-Item *)",
+      "Bash(Get-ChildItem -Path \"K:\\\\postgraduate\\\\doc-agent\" -Depth 1 -File)",
+      "Bash(Select-Object Name)"
+    ]
+  }
+}

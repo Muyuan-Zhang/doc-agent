@@ -1,4 +1,5 @@
 import logging
+from typing import Literal
 
 from sqlalchemy import text
 
@@ -33,6 +34,9 @@ CREATE TABLE IF NOT EXISTS chunks_metadata (
 CREATE INDEX IF NOT EXISTS idx_chunks_doc_id ON chunks_metadata(doc_id);
 CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
 """
+
+
+DocumentStatus = Literal["pending", "processing", "indexed", "failed"]
 
 
 def _chunk_id(chunk: ChunkSchema) -> str:
@@ -73,6 +77,7 @@ class KnowledgeBaseStore:
                     INSERT INTO documents (doc_id, filename, file_type, status, version, content_hash)
                     VALUES (:doc_id, :filename, :file_type, 'pending', :version, :content_hash)
                     ON CONFLICT (doc_id) DO UPDATE SET
+                        status       = 'pending',
                         version      = EXCLUDED.version,
                         content_hash = EXCLUDED.content_hash,
                         updated_at   = NOW()
@@ -89,7 +94,7 @@ class KnowledgeBaseStore:
     async def update_document_status(
         self,
         doc_id: str,
-        status: str,
+        status: DocumentStatus,
         chunk_count: int,
         pg: PostgreSQLClient,
     ) -> None:
@@ -176,10 +181,10 @@ class KnowledgeBaseStore:
     async def delete_document(
         self, doc_id: str, pg: PostgreSQLClient, milvus: MilvusClient
     ) -> None:
-        await milvus.delete_by_doc_id(doc_id)
         async with pg.engine.begin() as conn:
             await conn.execute(
                 text("DELETE FROM documents WHERE doc_id = :doc_id"),
                 {"doc_id": doc_id},
             )
+        await milvus.delete_by_doc_id(doc_id)
         logger.info("Document deleted: doc_id=%s", doc_id)

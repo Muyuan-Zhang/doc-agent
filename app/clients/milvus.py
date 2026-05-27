@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 from typing import Any, Callable, TypeVar
 
 from pymilvus import Collection, CollectionSchema, DataType, FieldSchema, connections, utility
@@ -10,6 +11,16 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
+
+def _assert_uuid(value: str) -> None:
+    if not _UUID_RE.match(value):
+        raise ValueError(f"doc_id must be a UUID v4, got {value!r}")
 
 
 class MilvusClient(AbstractClient):
@@ -87,6 +98,8 @@ class MilvusClient(AbstractClient):
 
     async def delete_by_doc_id(self, doc_id: str) -> None:
         """Delete all vectors belonging to a document (two-step: query then delete by PK)."""
+        _assert_uuid(doc_id)
+
         def _delete() -> None:
             col = Collection(settings.milvus_kb_collection, using=self._alias)
             results = col.query(
@@ -102,6 +115,8 @@ class MilvusClient(AbstractClient):
 
     async def query_ids_by_doc_id(self, doc_id: str) -> list[str]:
         """Return all chunk_ids stored for a given document."""
+        _assert_uuid(doc_id)
+
         def _query() -> list[str]:
             col = Collection(settings.milvus_kb_collection, using=self._alias)
             results = col.query(

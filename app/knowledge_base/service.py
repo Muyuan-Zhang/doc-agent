@@ -1,4 +1,5 @@
 import logging
+import os
 import tempfile
 import uuid
 from pathlib import Path
@@ -22,6 +23,7 @@ from app.knowledge_base.update import UpdateCoordinator
 logger = logging.getLogger(__name__)
 
 _ALLOWED = {"pdf", "txt"}
+_MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 
 
 class KnowledgeBaseService:
@@ -57,19 +59,31 @@ class KnowledgeBaseService:
             raise ValidationError(f"Unsupported file type: {ext!r}. Allowed: {', '.join(sorted(_ALLOWED))}")
 
         content = await file.read()
+        if len(content) > _MAX_UPLOAD_BYTES:
+            raise ValidationError(
+                f"File exceeds maximum allowed size of {_MAX_UPLOAD_BYTES // (1024 * 1024)} MB"
+            )
+
         doc_id = str(uuid.uuid4())
-
-        with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as tmp:
-            tmp.write(content)
-            tmp_path = Path(tmp.name)
-
-        await self._store.create_pending_document(
-            doc_id=doc_id,
-            filename=filename,
-            file_type=ext,
-            version=settings.knowledge_base_version,
-            pg=self._pg,
-        )
+        fd, tmp_name = tempfile.mkstemp(suffix=f".{ext}")
+        tmp_path = Path(tmp_name)
+        try:
+            os.write(fd, content)
+            os.close(fd)
+            await self._store.create_pending_document(
+                doc_id=doc_id,
+                filename=filename,
+                file_type=ext,
+                version=settings.knowledge_base_version,
+                pg=self._pg,
+            )
+        except Exception:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            tmp_path.unlink(missing_ok=True)
+            raise
         return doc_id, tmp_path
 
     async def run_ingest(self, doc_id: str, file_path: Path) -> None:

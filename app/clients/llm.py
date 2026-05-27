@@ -37,6 +37,8 @@ class OpenAILLMClient(AbstractLLMClient):
         self._background_sem = asyncio.Semaphore(settings.llm_semaphore_limits.background)
 
     async def connect(self) -> None:
+        if not settings.openai_api_key:
+            raise RuntimeError("OPENAI_API_KEY is required but not set")
         self._client = AsyncOpenAI(api_key=settings.openai_api_key)
         logger.info("OpenAI LLM client created model=%s", settings.openai_embedding_model)
 

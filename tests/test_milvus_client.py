@@ -201,6 +201,9 @@ class TestMilvusClientInsert:
         assert len(calls) == 1
 
 
+_VALID_DOC_UUID = "a0000000-0000-4000-8000-000000000001"
+
+
 class TestMilvusClientDeleteByDocId:
     async def test_delete_routes_through_run_sync(self):
         client = MilvusClient()
@@ -214,7 +217,7 @@ class TestMilvusClientDeleteByDocId:
                 fn()
 
         with patch("asyncio.to_thread", side_effect=fake_thread):
-            await client.delete_by_doc_id("doc-1")
+            await client.delete_by_doc_id(_VALID_DOC_UUID)
 
         assert len(calls) == 1
 
@@ -228,7 +231,7 @@ class TestMilvusClientDeleteByDocId:
                 fn()
 
         with patch("asyncio.to_thread", side_effect=run_fn):
-            await client.delete_by_doc_id("doc-1")
+            await client.delete_by_doc_id(_VALID_DOC_UUID)
 
         mock_col.delete.assert_not_called()
 
@@ -242,9 +245,14 @@ class TestMilvusClientDeleteByDocId:
                 fn()
 
         with patch("asyncio.to_thread", side_effect=run_fn):
-            await client.delete_by_doc_id("doc-1")
+            await client.delete_by_doc_id(_VALID_DOC_UUID)
 
         mock_col.delete.assert_called_once()
+
+    async def test_rejects_non_uuid_doc_id(self):
+        client = MilvusClient()
+        with pytest.raises(ValueError, match="UUID"):
+            await client.delete_by_doc_id("doc-1")
 
 
 class TestMilvusClientQueryIdsByDocId:
@@ -258,7 +266,7 @@ class TestMilvusClientQueryIdsByDocId:
                 return fn()
 
         with patch("asyncio.to_thread", side_effect=run_fn):
-            result = await client.query_ids_by_doc_id("doc-1")
+            result = await client.query_ids_by_doc_id(_VALID_DOC_UUID)
 
         assert result == ["id1", "id2"]
 
@@ -272,6 +280,11 @@ class TestMilvusClientQueryIdsByDocId:
                 return fn()
 
         with patch("asyncio.to_thread", side_effect=run_fn):
-            result = await client.query_ids_by_doc_id("doc-1")
+            result = await client.query_ids_by_doc_id(_VALID_DOC_UUID)
 
         assert result == []
+
+    async def test_rejects_non_uuid_doc_id(self):
+        client = MilvusClient()
+        with pytest.raises(ValueError, match="UUID"):
+            await client.query_ids_by_doc_id("doc-1")

@@ -25,17 +25,29 @@ def _make_embedding_response(vectors: list[list[float]]) -> MagicMock:
 class TestOpenAILLMClientConnect:
     async def test_connect_sets_client(self):
         client = OpenAILLMClient()
-        with patch("app.clients.llm.AsyncOpenAI", return_value=MagicMock()) as mock_cls:
-            await client.connect()
+        with patch("app.clients.llm.settings") as mock_settings:
+            mock_settings.openai_api_key = "sk-test"
+            mock_settings.openai_embedding_model = "text-embedding-3-small"
+            with patch("app.clients.llm.AsyncOpenAI", return_value=MagicMock()):
+                await client.connect()
         assert client._client is not None
 
     async def test_connect_passes_api_key(self):
         client = OpenAILLMClient()
-        with patch("app.clients.llm.AsyncOpenAI") as mock_cls:
-            await client.connect()
+        with patch("app.clients.llm.settings") as mock_settings:
+            mock_settings.openai_api_key = "sk-test-key"
+            mock_settings.openai_embedding_model = "text-embedding-3-small"
+            with patch("app.clients.llm.AsyncOpenAI") as mock_cls:
+                await client.connect()
         _, kwargs = mock_cls.call_args
-        from app.core.config import settings
-        assert kwargs.get("api_key") == settings.openai_api_key
+        assert kwargs.get("api_key") == "sk-test-key"
+
+    async def test_connect_raises_when_api_key_missing(self):
+        client = OpenAILLMClient()
+        with patch("app.clients.llm.settings") as mock_settings:
+            mock_settings.openai_api_key = ""
+            with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
+                await client.connect()
 
 
 class TestOpenAILLMClientDisconnect:

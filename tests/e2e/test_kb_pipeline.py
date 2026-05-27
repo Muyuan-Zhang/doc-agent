@@ -80,10 +80,14 @@ class TestUploadDocumentEndpoint:
         assert r.status_code == 422
 
 
+_DOC_UUID = "a0000000-0000-4000-8000-000000000001"
+_MISSING_UUID = "a0000000-0000-4000-8000-000000000002"
+
+
 class TestGetDocumentStatusEndpoint:
     async def test_status_returns_200_when_found(self):
         app = _app_with_state()
-        row = {"doc_id": "d1", "filename": "f.txt", "status": "indexed",
+        row = {"doc_id": _DOC_UUID, "filename": "f.txt", "status": "indexed",
                "chunk_count": 5, "version": "v1"}
         with patch("app.routers.knowledge_base.KnowledgeBaseService") as mock_svc_cls:
             svc = AsyncMock()
@@ -91,7 +95,7 @@ class TestGetDocumentStatusEndpoint:
             mock_svc_cls.return_value = svc
 
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-                r = await c.get("/knowledge-base/documents/d1/status")
+                r = await c.get(f"/knowledge-base/documents/{_DOC_UUID}/status")
 
         assert r.status_code == 200
         assert r.json()["status"] == "indexed"
@@ -105,9 +109,15 @@ class TestGetDocumentStatusEndpoint:
             mock_svc_cls.return_value = svc
 
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-                r = await c.get("/knowledge-base/documents/missing/status")
+                r = await c.get(f"/knowledge-base/documents/{_MISSING_UUID}/status")
 
         assert r.status_code == 404
+
+    async def test_status_returns_422_for_non_uuid(self):
+        app = _app_with_state()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.get("/knowledge-base/documents/not-a-uuid/status")
+        assert r.status_code == 422
 
 
 class TestDeleteDocumentEndpoint:
@@ -119,7 +129,7 @@ class TestDeleteDocumentEndpoint:
             mock_svc_cls.return_value = svc
 
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-                r = await c.delete("/knowledge-base/documents/d1")
+                r = await c.delete(f"/knowledge-base/documents/{_DOC_UUID}")
 
         assert r.status_code == 204
 
@@ -132,6 +142,12 @@ class TestDeleteDocumentEndpoint:
             mock_svc_cls.return_value = svc
 
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-                r = await c.delete("/knowledge-base/documents/missing")
+                r = await c.delete(f"/knowledge-base/documents/{_MISSING_UUID}")
 
         assert r.status_code == 404
+
+    async def test_delete_returns_422_for_non_uuid(self):
+        app = _app_with_state()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.delete("/knowledge-base/documents/not-a-uuid")
+        assert r.status_code == 422

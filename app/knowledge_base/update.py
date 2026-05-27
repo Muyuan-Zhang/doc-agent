@@ -84,12 +84,12 @@ class UpdateCoordinator:
 
             logger.info(
                 "Ingest complete doc_id=%s total=%d new=%d",
-                doc_id, len(all_chunks), len(embedded),
+                doc_id, len(all_chunks), len(new_chunks),
             )
             return IngestResult(
                 doc_id=doc_id,
                 chunks_total=len(all_chunks),
-                chunks_new=len(embedded),
+                chunks_new=len(new_chunks),
                 version=settings.knowledge_base_version,
             )
 
