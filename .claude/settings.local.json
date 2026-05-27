@@ -22,14 +22,17 @@
       "Bash(dir app *)",
       "Bash(git add *)",
       "Bash(git rm *)",
-      "Bash(git commit -m ' *)",
       "Bash(git restore *)",
       "Bash(npx ecc-agentshield *)",
       "PowerShell(New-Item *)",
       "Bash(Get-ChildItem -Path \"K:\\\\postgraduate\\\\doc-agent\" -Depth 1 -File)",
       "Bash(Select-Object Name)",
       "Bash(Get-ChildItem -Path \"K:\\\\postgraduate\\\\doc-agent\" -Force)",
-      "Bash(Select-Object Name, PSIsContainer)"
+      "Bash(Select-Object Name, PSIsContainer)",
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(git *)",
+      "Bash(Get-ChildItem *)"
     ],
     "deny": [
       "Bash(rm -rf *)",

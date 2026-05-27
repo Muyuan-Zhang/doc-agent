@@ -23,6 +23,16 @@ def _assert_uuid(value: str) -> None:
         raise ValueError(f"doc_id must be a UUID v4, got {value!r}")
 
 
+_SAFE_FILTER_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
+
+def _safe_filter_str(value: str, field: str = "value") -> None:
+    if not _SAFE_FILTER_RE.match(value):
+        raise ValueError(
+            f"{field} must be 1-64 alphanumeric characters, underscores, or hyphens"
+        )
+
+
 class MilvusClient(AbstractClient):
     """
     Milvus 客户端。所有 collection 操作通过 alias 路由，
@@ -153,6 +163,8 @@ class MilvusClient(AbstractClient):
         self, query_embedding: list[float], user_id: str, top_k: int
     ) -> list[dict]:
         """ANN search filtered by user_id; returns list of hit dicts."""
+        _safe_filter_str(user_id, "user_id")
+
         def _search() -> list[dict]:
             col = Collection(settings.memory_milvus_collection, using=self._alias)
             results = col.search(
@@ -176,6 +188,8 @@ class MilvusClient(AbstractClient):
 
     async def memory_delete(self, fact_id: str) -> None:
         """Delete a memory vector by fact_id."""
+        _assert_uuid(fact_id)
+
         def _delete() -> None:
             col = Collection(settings.memory_milvus_collection, using=self._alias)
             col.delete(expr=f'fact_id == "{fact_id}"')
