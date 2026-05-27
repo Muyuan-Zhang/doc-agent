@@ -30,6 +30,38 @@ def _app_with_state():
     return app
 
 
+class TestKbRouteMiddleware:
+    async def test_request_id_header_present_on_upload_response(self):
+        app = _app_with_state()
+        with patch("app.routers.knowledge_base.KnowledgeBaseService") as mock_svc_cls:
+            svc = AsyncMock()
+            svc.prepare_upload = AsyncMock(return_value=("doc-uuid-1", "/tmp/f.txt"))
+            mock_svc_cls.return_value = svc
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+                r = await c.post(
+                    "/knowledge-base/documents",
+                    files={"file": ("test.txt", io.BytesIO(b"hello"), "text/plain")},
+                )
+        assert "x-request-id" in r.headers
+
+    async def test_503_when_client_state_missing(self):
+        from app import create_app
+        app = create_app()
+        # Intentionally set no state attributes
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post(
+                "/knowledge-base/documents",
+                files={"file": ("test.txt", io.BytesIO(b"hello"), "text/plain")},
+            )
+        assert r.status_code == 503
+
+    async def test_upload_missing_file_returns_422(self):
+        app = _app_with_state()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post("/knowledge-base/documents")
+        assert r.status_code == 422
+
+
 class TestUploadDocumentEndpoint:
     async def test_upload_returns_202(self):
         app = _app_with_state()
