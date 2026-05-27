@@ -11,8 +11,13 @@ Interactive docs: `http://localhost:8000/docs` (Swagger UI)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/health` | Liveness probe — returns `{"status":"ok"}` |
+| `GET` | `/health` | Liveness probe — returns `{"status":"ok","service":"<app_name>"}` |
 | `GET` | `/health/ready` | Readiness probe — pings all 5 backends (postgres, redis, milvus, mq, llm); returns `503` if any fail |
+
+**Liveness response schema:**
+```json
+{ "status": "ok", "service": "doc-agent" }
+```
 
 **Readiness response schema:**
 ```json
@@ -66,10 +71,12 @@ Manages three-tier conversation memory per user/session.
 | Method | Path | Status | Description |
 |--------|------|--------|-------------|
 | `POST` | `/memory/turns` | `204` | Append a conversation turn; auto-compacts to PG summary when turn count ≥ threshold |
-| `GET` | `/memory/context/{session_id}` | `200` | Retrieve merged memory context (recent turns + latest summary + static facts) |
-| `POST` | `/memory/summarize/{session_id}` | `200` | Manually trigger LLM summarization and clear recent turns |
+| `GET` | `/memory/context/{session_id}?user_id=` | `200` | Retrieve merged memory context (recent turns + latest summary + static facts) |
+| `POST` | `/memory/summarize/{session_id}?user_id=` | `200` | Manually trigger LLM summarization and clear recent turns |
 | `POST` | `/memory/static` | `201` | Add a permanent static knowledge fact (embedded into Milvus) |
-| `DELETE` | `/memory/static/{fact_id}` | `204` | Remove a static fact from PG and Milvus |
+| `DELETE` | `/memory/static/{fact_id}?user_id=` | `204` | Remove a static fact from PG and Milvus |
+
+`user_id` is a **required** query parameter on context, summarize, and delete-fact endpoints.
 
 **Append turn request:**
 ```json
