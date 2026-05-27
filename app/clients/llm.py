@@ -30,10 +30,11 @@ class AbstractLLMClient(AbstractClient):
 
 
 class OpenAILLMClient(AbstractLLMClient):
-    """OpenAI Embeddings API 客户端，使用 background semaphore 限流。"""
+    """OpenAI Embeddings + Chat API 客户端，按任务类型使用独立 semaphore 限流。"""
 
     def __init__(self) -> None:
         self._client = None
+        self._interactive_sem = asyncio.Semaphore(settings.llm_semaphore_limits.interactive)
         self._background_sem = asyncio.Semaphore(settings.llm_semaphore_limits.background)
 
     async def connect(self) -> None:
@@ -57,7 +58,14 @@ class OpenAILLMClient(AbstractLLMClient):
             return False
 
     async def complete(self, prompt: str, **kwargs) -> str:
-        raise NotImplementedError("complete() implemented in M4")
+        max_tokens = kwargs.get("max_tokens", 512)
+        async with self._interactive_sem:
+            resp = await self._client.chat.completions.create(
+                model=settings.openai_chat_model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=max_tokens,
+            )
+            return resp.choices[0].message.content or ""
 
     async def embed(self, text: str) -> list[float]:
         async with self._background_sem:
