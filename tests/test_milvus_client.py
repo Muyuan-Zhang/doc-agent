@@ -1,0 +1,127 @@
+"""Unit tests for MilvusClient — P0."""
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from pymilvus import connections, utility
+
+from app.clients.milvus import MilvusClient
+from app.config import settings
+
+
+class TestMilvusClientRunSync:
+    async def test_run_sync_delegates_to_asyncio_to_thread(self):
+        import asyncio
+
+        client = MilvusClient()
+        fn = MagicMock(return_value=99)
+        with patch.object(asyncio, "to_thread", new=AsyncMock(return_value=99)) as mock_thread:
+            result = await client._run_sync(fn, "a", key="b")
+        mock_thread.assert_awaited_once_with(fn, "a", key="b")
+        assert result == 99
+
+
+class TestMilvusClientConnect:
+    async def test_connect_calls_connections_connect(self):
+        client = MilvusClient()
+        with patch("app.clients.milvus.connections.connect") as mock_connect:
+            with patch("asyncio.to_thread", new=AsyncMock(side_effect=lambda fn, *a, **kw: fn(*a, **kw))):
+                await client.connect()
+        mock_connect.assert_called_once()
+
+    async def test_connect_passes_host_and_port(self):
+        client = MilvusClient()
+        calls: list = []
+
+        async def fake_thread(fn, *args, **kwargs):
+            calls.append((fn, kwargs))
+
+        with patch("asyncio.to_thread", side_effect=fake_thread):
+            await client.connect()
+
+        _, kwargs = calls[0]
+        assert kwargs["host"] == settings.milvus_host
+        assert kwargs["port"] == settings.milvus_port
+
+    async def test_connect_uses_alias_from_settings(self):
+        client = MilvusClient()
+        calls: list = []
+
+        async def fake_thread(fn, *args, **kwargs):
+            calls.append((fn, kwargs))
+
+        with patch("asyncio.to_thread", side_effect=fake_thread):
+            await client.connect()
+
+        _, kwargs = calls[0]
+        assert kwargs["alias"] == settings.milvus_alias
+
+
+class TestMilvusClientDisconnect:
+    async def test_disconnect_calls_connections_disconnect(self):
+        client = MilvusClient()
+        with patch("app.clients.milvus.connections.disconnect") as mock_disconnect:
+            with patch("asyncio.to_thread", new=AsyncMock(side_effect=lambda fn, *a, **kw: fn(*a, **kw))):
+                await client.disconnect()
+        mock_disconnect.assert_called_once()
+
+    async def test_disconnect_passes_alias(self):
+        client = MilvusClient()
+        calls: list = []
+
+        async def fake_thread(fn, *args, **kwargs):
+            calls.append((fn, kwargs))
+
+        with patch("asyncio.to_thread", side_effect=fake_thread):
+            await client.disconnect()
+
+        _, kwargs = calls[0]
+        assert kwargs["alias"] == settings.milvus_alias
+
+
+class TestMilvusClientPing:
+    async def test_ping_returns_true_when_version_obtained(self):
+        client = MilvusClient()
+
+        async def fake_thread(fn, *args, **kwargs):
+            return "2.4.0"
+
+        with patch("asyncio.to_thread", side_effect=fake_thread):
+            result = await client.ping()
+        assert result is True
+
+    async def test_ping_calls_get_server_version(self):
+        client = MilvusClient()
+        calls: list = []
+
+        async def fake_thread(fn, *args, **kwargs):
+            calls.append(fn)
+            return "2.4.0"
+
+        with patch("asyncio.to_thread", side_effect=fake_thread):
+            await client.ping()
+
+        assert calls[0] is utility.get_server_version
+
+    async def test_ping_returns_false_on_exception(self):
+        client = MilvusClient()
+
+        async def fake_thread(fn, *args, **kwargs):
+            raise ConnectionError("Milvus unreachable")
+
+        with patch("asyncio.to_thread", side_effect=fake_thread):
+            result = await client.ping()
+        assert result is False
+
+    async def test_ping_passes_alias_to_get_server_version(self):
+        client = MilvusClient()
+        calls: list = []
+
+        async def fake_thread(fn, *args, **kwargs):
+            calls.append((fn, kwargs))
+            return "2.4.0"
+
+        with patch("asyncio.to_thread", side_effect=fake_thread):
+            await client.ping()
+
+        _, kwargs = calls[0]
+        assert kwargs["using"] == settings.milvus_alias
