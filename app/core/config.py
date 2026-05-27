@@ -22,8 +22,8 @@ class Settings(BaseSettings):
     app_name: str = "doc-agent"
     debug: bool = False
 
-    # MySQL
-    mysql_url: str = "mysql+aiomysql://user:password@localhost:3306/docagent"
+    # PostgreSQL
+    postgres_url: str = "postgresql+asyncpg://user:password@localhost:5432/docagent"
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"

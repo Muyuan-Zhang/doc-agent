@@ -5,10 +5,10 @@ from fastapi import FastAPI
 
 from app.clients.milvus import MilvusClient
 from app.clients.mq import RedisStreamsMQClient
-from app.clients.mysql import MySQLClient
+from app.clients.postgresql import PostgreSQLClient
 from app.clients.redis import RedisClient
-from app.exceptions import register_exception_handlers
-from app.logging_config import setup_logging
+from app.core.exceptions import register_exception_handlers
+from app.core.logging_config import setup_logging
 from app.middleware.registry import register_middlewares
 from app.routers.agent import router as agent_router
 from app.routers.health import router as health_router
@@ -24,10 +24,10 @@ async def _lifespan(app: FastAPI):
     # Each connected client is tracked; on failure, already-connected
     # clients are disconnected in reverse order before re-raising.
     named_clients = [
-        ("mysql",  MySQLClient()),
-        ("redis",  RedisClient()),
-        ("milvus", MilvusClient()),
-        ("mq",     RedisStreamsMQClient()),
+        ("postgres", PostgreSQLClient()),
+        ("redis",    RedisClient()),
+        ("milvus",   MilvusClient()),
+        ("mq",       RedisStreamsMQClient()),
     ]
 
     connected: list = []

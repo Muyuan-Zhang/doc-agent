@@ -58,13 +58,13 @@ class TestCacheKey:
         client = RedisClient()
         key = client.cache_key("docs", "d123", "lock")
         # Format: {kb_version}:{namespace}:{parts joined by :}
-        from app.config import settings
+        from app.core.config import settings
         assert key == f"{settings.knowledge_base_version}:docs:d123:lock"
 
     async def test_cache_key_single_part(self):
         client = RedisClient()
         key = client.cache_key("sessions", "abc")
-        from app.config import settings
+        from app.core.config import settings
         assert key == f"{settings.knowledge_base_version}:sessions:abc"
 
 

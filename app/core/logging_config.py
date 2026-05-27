@@ -4,7 +4,7 @@ from contextvars import ContextVar
 
 from pythonjsonlogger import jsonlogger
 
-from app.config import settings
+from app.core.config import settings
 
 request_id_var: ContextVar[str] = ContextVar("request_id", default="")
 trace_id_var: ContextVar[str] = ContextVar("trace_id", default="")  # OpenTelemetry 预留

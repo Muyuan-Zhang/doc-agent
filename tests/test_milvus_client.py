@@ -5,7 +5,7 @@ import pytest
 from pymilvus import connections, utility
 
 from app.clients.milvus import MilvusClient
-from app.config import settings
+from app.core.config import settings
 
 
 class TestMilvusClientRunSync:

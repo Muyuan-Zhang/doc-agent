@@ -3,7 +3,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from app.exceptions import (
+from app.core.exceptions import (
     AppError,
     NotFoundError,
     ServiceUnavailableError,

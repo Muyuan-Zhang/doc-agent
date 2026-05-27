@@ -6,7 +6,7 @@ from typing import AsyncIterator
 import redis.asyncio as aioredis
 
 from app.clients.base import AbstractClient
-from app.config import settings
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 

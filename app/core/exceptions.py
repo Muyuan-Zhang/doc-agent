@@ -4,7 +4,7 @@ import traceback
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app.logging_config import request_id_var, trace_id_var
+from app.core.logging_config import request_id_var, trace_id_var
 
 logger = logging.getLogger(__name__)
 

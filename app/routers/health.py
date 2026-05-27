@@ -4,7 +4,7 @@ import logging
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from app.config import settings
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["health"])
@@ -26,10 +26,10 @@ async def readiness(request: Request) -> JSONResponse:
 
     state = request.app.state
     results = await asyncio.gather(
-        check("mysql",  state.mysql),
-        check("redis",  state.redis),
-        check("milvus", state.milvus),
-        check("mq",     state.mq),
+        check("postgres", state.postgres),
+        check("redis",    state.redis),
+        check("milvus",   state.milvus),
+        check("mq",       state.mq),
     )
 
     checks = dict(results)
