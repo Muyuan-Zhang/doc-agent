@@ -82,9 +82,9 @@ class TestEnsureGroup:
         client = RedisStreamsMQClient()
         mock_redis = AsyncMock()
         client._client = mock_redis
-        await client.ensure_group("mystream", "mygroup")
+        await client.ensure_group()
         mock_redis.xgroup_create.assert_awaited_once_with(
-            "mystream", "mygroup", id="0", mkstream=True
+            client._stream, client._group, id="0", mkstream=True
         )
 
     async def test_ensure_group_swallows_busygroup_error(self):
@@ -94,7 +94,7 @@ class TestEnsureGroup:
             side_effect=aioredis.ResponseError("BUSYGROUP Consumer Group name already exists")
         )
         client._client = mock_redis
-        await client.ensure_group("mystream", "mygroup")  # must not raise
+        await client.ensure_group()  # must not raise
 
     async def test_ensure_group_reraises_non_busygroup_error(self):
         client = RedisStreamsMQClient()
@@ -104,7 +104,7 @@ class TestEnsureGroup:
         )
         client._client = mock_redis
         with pytest.raises(aioredis.ResponseError):
-            await client.ensure_group("mystream", "mygroup")
+            await client.ensure_group()
 
 
 class TestPublish:
@@ -113,16 +113,16 @@ class TestPublish:
         mock_redis = AsyncMock()
         mock_redis.xadd = AsyncMock(return_value="1234567890-0")
         client._client = mock_redis
-        result = await client.publish("mystream", {"key": "value"})
+        result = await client.publish({"key": "value"})
         assert result == "1234567890-0"
 
-    async def test_publish_calls_xadd_with_correct_args(self):
+    async def test_publish_calls_xadd_with_stream_from_settings(self):
         client = RedisStreamsMQClient()
         mock_redis = AsyncMock()
         mock_redis.xadd = AsyncMock(return_value="123-0")
         client._client = mock_redis
-        await client.publish("mystream", {"action": "process"})
-        mock_redis.xadd.assert_awaited_once_with("mystream", {"action": "process"})
+        await client.publish({"action": "process"})
+        mock_redis.xadd.assert_awaited_once_with(client._stream, {"action": "process"})
 
 
 class TestConsume:
@@ -130,16 +130,16 @@ class TestConsume:
         client = RedisStreamsMQClient()
         mock_redis = AsyncMock()
         mock_redis.xreadgroup = AsyncMock(return_value=[
-            ("mystream", [("123-0", {"k": "v"}), ("124-0", {"k": "v2"})])
+            (client._stream, [("123-0", {"k": "v"}), ("124-0", {"k": "v2"})])
         ])
         client._client = mock_redis
 
-        results = [msg async for msg in client.consume("mystream", "grp", "consumer")]
+        results = [msg async for msg in client.consume()]
 
         assert len(results) == 2
         assert results[0].id == "123-0"
         assert results[0].data == {"k": "v"}
-        assert results[0].stream == "mystream"
+        assert results[0].stream == client._stream
         assert results[1].id == "124-0"
 
     async def test_consume_yields_nothing_on_empty_response(self):
@@ -148,7 +148,7 @@ class TestConsume:
         mock_redis.xreadgroup = AsyncMock(return_value=None)
         client._client = mock_redis
 
-        results = [msg async for msg in client.consume("mystream", "grp", "consumer")]
+        results = [msg async for msg in client.consume()]
         assert results == []
 
     async def test_consume_passes_correct_args_to_xreadgroup(self):
@@ -157,12 +157,12 @@ class TestConsume:
         mock_redis.xreadgroup = AsyncMock(return_value=None)
         client._client = mock_redis
 
-        async for _ in client.consume("s", "g", "c", count=5, block_ms=1000):
+        async for _ in client.consume(count=5, block_ms=1000):
             pass
 
         call_kwargs = mock_redis.xreadgroup.call_args.kwargs
-        assert call_kwargs["groupname"] == "g"
-        assert call_kwargs["consumername"] == "c"
+        assert call_kwargs["groupname"] == client._group
+        assert call_kwargs["consumername"] == client._consumer
         assert call_kwargs["count"] == 5
         assert call_kwargs["block"] == 1000
 
@@ -172,5 +172,5 @@ class TestAck:
         client = RedisStreamsMQClient()
         mock_redis = AsyncMock()
         client._client = mock_redis
-        await client.ack("mystream", "mygroup", "123-0")
-        mock_redis.xack.assert_awaited_once_with("mystream", "mygroup", "123-0")
+        await client.ack("123-0")
+        mock_redis.xack.assert_awaited_once_with(client._stream, client._group, "123-0")

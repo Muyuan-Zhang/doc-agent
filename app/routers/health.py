@@ -20,9 +20,10 @@ async def readiness(request: Request) -> JSONResponse:
     async def check(name: str, client) -> tuple[str, str]:
         try:
             ok = await client.ping()
-            return name, "ok" if ok else f"error: ping returned false"
+            return name, "ok" if ok else "error: ping returned false"
         except Exception as exc:
-            return name, f"error: {exc}"
+            logger.warning("Client %s ping failed: %s", name, exc)
+            return name, "error: service unavailable"
 
     state = request.app.state
     results = await asyncio.gather(

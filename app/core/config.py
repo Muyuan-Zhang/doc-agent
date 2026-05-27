@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     debug: bool = False
 
     # PostgreSQL
-    postgres_url: str = "postgresql+asyncpg://user:password@localhost:5432/docagent"
+    postgres_url: str = "postgresql+asyncpg://localhost:5432/docagent"
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"

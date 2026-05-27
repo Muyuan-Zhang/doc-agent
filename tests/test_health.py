@@ -162,4 +162,4 @@ class TestReadinessPingException:
             response = await client.get("/health/ready")
         checks = response.json()["checks"]
         assert checks["postgres"].startswith("error:")
-        assert "connection refused" in checks["postgres"]
+        assert checks["postgres"] == "error: service unavailable"

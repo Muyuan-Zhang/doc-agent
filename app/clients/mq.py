@@ -20,24 +20,21 @@ class MQMessage:
 
 class AbstractMQClient(AbstractClient):
     @abstractmethod
-    async def publish(self, stream: str, data: dict) -> str:
+    async def publish(self, data: dict) -> str:
         """发布消息，返回 message id。"""
 
     @abstractmethod
     async def consume(
         self,
-        stream: str,
-        group: str,
-        consumer: str,
         count: int = 10,
         block_ms: int = 2000,
     ) -> AsyncIterator[MQMessage]: ...
 
     @abstractmethod
-    async def ack(self, stream: str, group: str, message_id: str) -> None: ...
+    async def ack(self, message_id: str) -> None: ...
 
     @abstractmethod
-    async def ensure_group(self, stream: str, group: str) -> None:
+    async def ensure_group(self) -> None:
         """创建 Consumer Group（幂等）。"""
 
 
@@ -65,7 +62,7 @@ class RedisStreamsMQClient(AbstractMQClient):
             encoding="utf-8",
             decode_responses=True,
         )
-        await self.ensure_group(self._stream, self._group)
+        await self.ensure_group()
         logger.info(
             "MQ connected stream=%s group=%s consumer=%s",
             self._stream, self._group, self._consumer,
@@ -84,29 +81,25 @@ class RedisStreamsMQClient(AbstractMQClient):
             logger.warning("MQ ping failed: %s", exc)
             return False
 
-    async def ensure_group(self, stream: str, group: str) -> None:
+    async def ensure_group(self) -> None:
         try:
-            await self.client.xgroup_create(stream, group, id="0", mkstream=True)
+            await self.client.xgroup_create(self._stream, self._group, id="0", mkstream=True)
         except aioredis.ResponseError as exc:
             if "BUSYGROUP" not in str(exc):
                 raise
 
-    async def publish(self, stream: str, data: dict) -> str:
-        msg_id = await self.client.xadd(stream, data)
-        return msg_id
+    async def publish(self, data: dict) -> str:
+        return await self.client.xadd(self._stream, data)
 
     async def consume(
         self,
-        stream: str,
-        group: str,
-        consumer: str,
         count: int = 10,
         block_ms: int = 2000,
     ) -> AsyncIterator[MQMessage]:
         entries = await self.client.xreadgroup(
-            groupname=group,
-            consumername=consumer,
-            streams={stream: ">"},
+            groupname=self._group,
+            consumername=self._consumer,
+            streams={self._stream: ">"},
             count=count,
             block=block_ms,
         )
@@ -114,7 +107,7 @@ class RedisStreamsMQClient(AbstractMQClient):
             return
         for _, messages in entries:
             for msg_id, fields in messages:
-                yield MQMessage(id=msg_id, data=fields, stream=stream)
+                yield MQMessage(id=msg_id, data=fields, stream=self._stream)
 
-    async def ack(self, stream: str, group: str, message_id: str) -> None:
-        await self.client.xack(stream, group, message_id)
+    async def ack(self, message_id: str) -> None:
+        await self.client.xack(self._stream, self._group, message_id)

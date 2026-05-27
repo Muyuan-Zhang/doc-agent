@@ -25,7 +25,8 @@ class PostgreSQLClient(AbstractClient):
             pool_size=10,
             max_overflow=20,
             pool_pre_ping=True,
-            echo=settings.debug,
+            echo=False,
+            echo_pool=settings.debug,
         )
         logger.info("PostgreSQL connection pool created")
 
