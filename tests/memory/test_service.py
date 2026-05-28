@@ -167,6 +167,41 @@ class TestSummarizeSession:
         assert sid == "sess"
         assert len(passed_turns) == 2
 
+    async def test_passes_previous_summary_for_incremental(self):
+        prev = MemorySummary(
+            summary_id="prev", user_id="user-1", session_id="sess",
+            summary_text="old context", content_hash="c" * 64,
+        )
+        summary_store = _make_summary_store(summary=prev)
+        svc = _make_service(summary_store=summary_store)
+        await svc.summarize_session("sess", "user-1")
+        kwargs = summary_store.compact.call_args[1]
+        assert kwargs.get("previous_summary") is prev
+
+
+class TestClearRetry:
+    async def test_clear_retried_on_failure(self):
+        from unittest.mock import AsyncMock
+        from app.memory.service import _clear_with_retry
+        from app.memory.recent import RecentMemoryStore
+
+        recent = MagicMock()
+        redis = MagicMock()
+        fail_once = AsyncMock(side_effect=[Exception("timeout"), None])
+        recent.clear = fail_once
+        await _clear_with_retry(recent, redis, "sess")
+        assert fail_once.await_count == 2
+
+    async def test_clear_gives_up_after_max_retries(self):
+        from unittest.mock import AsyncMock
+        from app.memory.service import _clear_with_retry, _CLEAR_RETRIES
+
+        recent = MagicMock()
+        redis = MagicMock()
+        recent.clear = AsyncMock(side_effect=Exception("always fails"))
+        await _clear_with_retry(recent, redis, "sess")  # must not raise
+        assert recent.clear.await_count == _CLEAR_RETRIES
+
 
 class TestAddStaticFact:
     async def test_delegates_to_static_store(self):
