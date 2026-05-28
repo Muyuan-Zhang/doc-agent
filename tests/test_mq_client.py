@@ -174,3 +174,48 @@ class TestAck:
         client._client = mock_redis
         await client.ack("123-0")
         mock_redis.xack.assert_awaited_once_with(client._stream, client._group, "123-0")
+
+
+class TestRedisStreamsMQClientConstructorOverrides:
+    def test_custom_group_is_used(self):
+        client = RedisStreamsMQClient(group="my-group")
+        assert client._group == "my-group"
+
+    def test_custom_consumer_is_used(self):
+        client = RedisStreamsMQClient(consumer="my-consumer")
+        assert client._consumer == "my-consumer"
+
+    def test_custom_stream_is_used(self):
+        client = RedisStreamsMQClient(stream="my-stream")
+        assert client._stream == "my-stream"
+
+    def test_defaults_when_no_overrides(self):
+        from app.core.config import settings
+        client = RedisStreamsMQClient()
+        assert client._stream == settings.mq_stream_name
+        assert client._group == settings.mq_consumer_group
+
+    def test_none_override_falls_back_to_settings(self):
+        from app.core.config import settings
+        client = RedisStreamsMQClient(group=None)
+        assert client._group == settings.mq_consumer_group
+
+
+class TestConsistencyMQClient:
+    def test_uses_consistency_consumer_group(self):
+        from app.clients.mq import ConsistencyMQClient
+        from app.core.config import settings
+        client = ConsistencyMQClient()
+        assert client._group == settings.consistency_consumer_group
+
+    def test_uses_consistency_consumer_name(self):
+        from app.clients.mq import ConsistencyMQClient
+        from app.core.config import settings
+        client = ConsistencyMQClient()
+        assert client._consumer == settings.consistency_consumer_name
+
+    def test_shares_stream_with_main_mq(self):
+        from app.clients.mq import ConsistencyMQClient
+        from app.core.config import settings
+        client = ConsistencyMQClient()
+        assert client._stream == settings.mq_stream_name
