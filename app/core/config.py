@@ -50,6 +50,13 @@ class Settings(BaseSettings):
     # LLM concurrency: three independent semaphore buckets
     llm_semaphore_limits: LLMSemaphoreLimits = LLMSemaphoreLimits()
 
+    # M2 Retrieval
+    bm25_top_k: int = 20
+    vector_top_k: int = 20
+    rrf_k: int = 60
+    rerank_top_n: int = 10
+    final_top_k: int = 5
+
     # Redis Streams MQ
     mq_stream_name: str = "doc-agent:tasks"
     mq_consumer_group: str = "doc-agent-workers"

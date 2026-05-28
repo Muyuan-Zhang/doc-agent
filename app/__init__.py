@@ -11,6 +11,11 @@ from app.clients.redis import RedisClient
 from app.core.exceptions import register_exception_handlers
 from app.core.logging_config import setup_logging
 from app.middleware.registry import register_middlewares
+from app.retrieval.bm25 import BM25Strategy
+from app.retrieval.hybrid import ConcreteHybridRetriever
+from app.retrieval.reranker import LLMReranker
+from app.retrieval.router import router as retrieval_router
+from app.retrieval.vector import VectorStrategy
 from app.routers.agent import router as agent_router
 from app.routers.health import router as health_router
 from app.routers.knowledge_base import router as kb_router
@@ -47,6 +52,11 @@ async def _lifespan(app: FastAPI):
                 logger.warning("Error during startup-failure cleanup: %s", exc)
         raise
 
+    bm25 = BM25Strategy(pg=app.state.postgres)
+    vector = VectorStrategy(milvus=app.state.milvus, llm=app.state.llm)
+    reranker = LLMReranker(llm=app.state.llm)
+    app.state.retriever = ConcreteHybridRetriever(bm25=bm25, vector=vector, reranker=reranker)
+
     yield
 
     for client in reversed(connected):
@@ -63,4 +73,5 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(agent_router)
     app.include_router(kb_router)
+    app.include_router(retrieval_router)
     return app
