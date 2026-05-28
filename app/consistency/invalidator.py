@@ -7,10 +7,15 @@ logger = logging.getLogger(__name__)
 
 
 class CacheInvalidator:
-    def __init__(self, redis: RedisClient, namespace: str) -> None:
+    def __init__(
+        self,
+        redis: RedisClient,
+        namespace: str,
+        batch: int | None = None,
+    ) -> None:
         self._redis = redis
         self._namespace = namespace
-        self._batch = settings.cache_invalidation_scan_batch
+        self._batch = batch if batch is not None else settings.cache_invalidation_scan_batch
 
     async def invalidate(self, version: str) -> int:
         """SCAN {version}:{namespace}:* and UNLINK matches. Returns count of deleted keys."""

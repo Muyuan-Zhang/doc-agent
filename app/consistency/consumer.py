@@ -25,7 +25,8 @@ class ConsistencyConsumer:
         async for msg in self._mq.consume():
             event = msg.data.get("event")
             if event in _INVALIDATE_EVENTS:
-                await self._invalidator.invalidate(self._version)
+                version = msg.data.get("version", self._version)
+                await self._invalidator.invalidate(version)
                 count += 1
             await self._mq.ack(msg.id)
         return count

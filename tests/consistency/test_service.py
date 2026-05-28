@@ -1,6 +1,6 @@
 """Unit tests for ConsistencyService."""
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -91,3 +91,45 @@ class TestConsistencyServiceLoop:
         with pytest.raises(asyncio.CancelledError):
             await svc._loop()
         assert call_count >= 1
+
+    async def test_loop_backs_off_after_error(self):
+        consumer = _make_consumer()
+        call_count = 0
+
+        async def side_effect():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("redis down")
+            raise asyncio.CancelledError
+
+        consumer.run_once = AsyncMock(side_effect=side_effect)
+        svc = ConsistencyService(consumer)
+        with patch("app.consistency.service.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            with pytest.raises(asyncio.CancelledError):
+                await svc._loop()
+        mock_sleep.assert_awaited_once()
+
+    async def test_loop_resets_backoff_on_success(self):
+        from app.consistency.service import _BASE_BACKOFF
+        consumer = _make_consumer()
+        call_count = 0
+
+        async def side_effect():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("transient")
+            if call_count == 2:
+                return 0  # success — backoff should reset
+            raise asyncio.CancelledError
+
+        consumer.run_once = AsyncMock(side_effect=side_effect)
+        svc = ConsistencyService(consumer)
+        sleep_calls = []
+        async def mock_sleep(n):
+            sleep_calls.append(n)
+        with patch("app.consistency.service.asyncio.sleep", side_effect=mock_sleep):
+            with pytest.raises(asyncio.CancelledError):
+                await svc._loop()
+        assert sleep_calls == [_BASE_BACKOFF]

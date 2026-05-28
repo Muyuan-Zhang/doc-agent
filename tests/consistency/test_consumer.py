@@ -59,6 +59,14 @@ class TestConsistencyConsumerKbUpdated:
         await consumer.run_once()
         inv.invalidate.assert_awaited_once_with("v1")
 
+    async def test_uses_version_from_message_payload(self):
+        msg = MQMessage(id="1-0", data={"event": "kb_updated", "doc_id": "d1", "version": "v9"}, stream="s")
+        mq = _make_mq(msg)
+        inv = _make_invalidator()
+        consumer = ConsistencyConsumer(mq, inv, "v1")
+        await consumer.run_once()
+        inv.invalidate.assert_awaited_once_with("v9")
+
     async def test_acks_kb_updated_message(self):
         mq = _make_mq(_msg("kb_updated", "456-0"))
         inv = _make_invalidator()
