@@ -32,6 +32,7 @@ def make_redis_mock() -> MagicMock:
     """Redis mock with all memory-store operations pre-stubbed."""
     m = make_client_mock()
     m.cache_key = MagicMock(return_value="v1:memory:recent:test-session")
+    m.increment_with_ttl = AsyncMock(return_value=1)
     inner = MagicMock()
     inner.rpush = AsyncMock(return_value=1)
     inner.ltrim = AsyncMock()

@@ -87,6 +87,38 @@ class TestAppendTurnEndpoint:
             r = await c.post("/memory/turns")
         assert r.status_code == 422
 
+    async def test_session_id_with_colon_returns_422(self):
+        app, *_ = _app_with_memory()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post("/memory/turns", json={
+                "session_id": "sess:inject", "user_id": "u1", "role": "user", "content": "hi",
+            })
+        assert r.status_code == 422
+
+    async def test_user_id_with_quotes_returns_422(self):
+        app, *_ = _app_with_memory()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post("/memory/turns", json={
+                "session_id": "s1", "user_id": 'user"evil"', "role": "user", "content": "hi",
+            })
+        assert r.status_code == 422
+
+    async def test_invalid_role_returns_422(self):
+        app, *_ = _app_with_memory()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post("/memory/turns", json={
+                "session_id": "s1", "user_id": "u1", "role": "admin", "content": "hi",
+            })
+        assert r.status_code == 422
+
+    async def test_content_exceeds_max_length_returns_422(self):
+        app, *_ = _app_with_memory()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post("/memory/turns", json={
+                "session_id": "s1", "user_id": "u1", "role": "user", "content": "x" * 32769,
+            })
+        assert r.status_code == 422
+
 
 # ---------------------------------------------------------------------------
 # GET /memory/context/{session_id}
@@ -118,6 +150,12 @@ class TestGetContextEndpoint:
         app, *_ = _app_with_memory()
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             r = await c.get("/memory/context/sess-1")
+        assert r.status_code == 422
+
+    async def test_user_id_with_special_chars_returns_422(self):
+        app, *_ = _app_with_memory()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.get("/memory/context/sess-1", params={"user_id": "user@example.com"})
         assert r.status_code == 422
 
     async def test_summary_included_when_pg_has_row(self):
@@ -188,6 +226,12 @@ class TestSummarizeEndpoint:
             r = await c.post("/memory/summarize/sess-1")
         assert r.status_code == 422
 
+    async def test_user_id_too_long_returns_422(self):
+        app, *_ = _app_with_memory()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post("/memory/summarize/sess-1", params={"user_id": "u" * 65})
+        assert r.status_code == 422
+
 
 # ---------------------------------------------------------------------------
 # POST /memory/static
@@ -230,31 +274,91 @@ class TestAddStaticFactEndpoint:
                 "content": "A fact that cannot be embedded.",
             })
         assert r.status_code == 500
+    async def test_user_id_with_at_sign_returns_422(self):
+        app, *_ = _app_with_memory()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post("/memory/static", json={"user_id": "u@bad", "content": "fact"})
+        assert r.status_code == 422
+
+    async def test_fact_content_exceeds_max_length_returns_422(self):
+        app, *_ = _app_with_memory()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post("/memory/static", json={"user_id": "u1", "content": "x" * 32769})
+        assert r.status_code == 422
 
 
 # ---------------------------------------------------------------------------
 # DELETE /memory/static/{fact_id}
 # ---------------------------------------------------------------------------
 
+_FACT_ID = "a1b2c3d4-e5f6-4a7b-8c9d-e0f1a2b3c4d5"
+_FACT_ID_2 = "b2c3d4e5-f6a7-4b8c-9d0e-f1a2b3c4d5e6"
+
+
 class TestDeleteStaticFactEndpoint:
     async def test_returns_204_on_success(self):
         app, redis, pg, milvus, llm = _app_with_memory()
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-            r = await c.delete("/memory/static/fact-1", params={"user_id": "user-1"})
+            r = await c.delete(f"/memory/static/{_FACT_ID}", params={"user_id": "user-1"})
         assert r.status_code == 204
 
     async def test_returns_404_when_fact_missing(self):
         pg = make_pg_mock(rowcount=0)
         app = make_app(postgres=pg)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-            r = await c.delete("/memory/static/missing-fact", params={"user_id": "user-1"})
+            r = await c.delete(f"/memory/static/{_FACT_ID_2}", params={"user_id": "user-1"})
         assert r.status_code == 404
 
     async def test_missing_user_id_returns_422(self):
         app, *_ = _app_with_memory()
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-            r = await c.delete("/memory/static/fact-1")
+            r = await c.delete(f"/memory/static/{_FACT_ID}")
         assert r.status_code == 422
+
+    async def test_non_uuid_fact_id_returns_422(self):
+        app, *_ = _app_with_memory()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.delete("/memory/static/not-a-uuid", params={"user_id": "u1"})
+        assert r.status_code == 422
+
+    async def test_uuid_v1_fact_id_returns_422(self):
+        app, *_ = _app_with_memory()
+        uuid_v1 = "a1b2c3d4-e5f6-1a7b-8c9d-e0f1a2b3c4d5"  # version 1, not 4
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.delete(f"/memory/static/{uuid_v1}", params={"user_id": "u1"})
+        assert r.status_code == 422
+
+    async def test_user_id_with_colon_returns_422(self):
+        app, *_ = _app_with_memory()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.delete(f"/memory/static/{_FACT_ID}", params={"user_id": "u:bad"})
+        assert r.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting
+# ---------------------------------------------------------------------------
+
+class TestMemoryRateLimiting:
+    async def test_turns_returns_429_when_rate_limit_exceeded(self):
+        from unittest.mock import AsyncMock
+        app, *_ = _app_with_memory()
+        app.state.redis.increment_with_ttl = AsyncMock(return_value=61)  # over limit of 60
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post("/memory/turns", json={
+                "session_id": "s1", "user_id": "u1", "role": "user", "content": "hi",
+            })
+        assert r.status_code == 429
+        assert "Rate limit exceeded" in r.json()["detail"]
+
+    async def test_summarize_returns_429_when_rate_limit_exceeded(self):
+        from unittest.mock import AsyncMock
+        app, *_ = _app_with_memory()
+        app.state.redis.increment_with_ttl = AsyncMock(return_value=6)  # over limit of 5
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post("/memory/summarize/sess-1", params={"user_id": "u1"})
+        assert r.status_code == 429
+        assert "Rate limit exceeded" in r.json()["detail"]
 
 
 # ---------------------------------------------------------------------------

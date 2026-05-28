@@ -22,7 +22,6 @@
       "Bash(dir app *)",
       "Bash(git add *)",
       "Bash(git rm *)",
-      "Bash(git commit -m ' *)",
       "Bash(git restore *)",
       "Bash(npx ecc-agentshield *)",
       "PowerShell(New-Item *)",
@@ -41,6 +40,7 @@
       "PowerShell(git remote *)",
       "mcp__plugin_ecc_github__list_pull_requests",
       "Bash(python -c *)"
+      "Bash(Get-ChildItem *)"
     ],
     "deny": [
       "Bash(rm -rf *)",
