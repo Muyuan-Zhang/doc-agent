@@ -154,7 +154,39 @@ class TestOpenAILLMClientEmbedBatch:
 
 
 class TestOpenAILLMClientComplete:
-    async def test_complete_raises_not_implemented(self):
-        client, _ = _connected_client()
-        with pytest.raises(NotImplementedError):
-            await client.complete("prompt")
+    async def test_complete_returns_string(self):
+        client, mock_openai = _connected_client()
+        mock_choice = MagicMock()
+        mock_choice.message.content = "The answer."
+        mock_resp = MagicMock()
+        mock_resp.choices = [mock_choice]
+        mock_openai.chat = MagicMock()
+        mock_openai.chat.completions = MagicMock()
+        mock_openai.chat.completions.create = AsyncMock(return_value=mock_resp)
+        result = await client.complete("What is 2+2?")
+        assert result == "The answer."
+
+    async def test_complete_passes_max_tokens(self):
+        client, mock_openai = _connected_client()
+        mock_choice = MagicMock()
+        mock_choice.message.content = "ok"
+        mock_resp = MagicMock()
+        mock_resp.choices = [mock_choice]
+        mock_openai.chat = MagicMock()
+        mock_openai.chat.completions = MagicMock()
+        mock_openai.chat.completions.create = AsyncMock(return_value=mock_resp)
+        await client.complete("prompt", max_tokens=256)
+        _, kwargs = mock_openai.chat.completions.create.call_args
+        assert kwargs["max_tokens"] == 256
+
+    async def test_complete_empty_content_returns_empty_string(self):
+        client, mock_openai = _connected_client()
+        mock_choice = MagicMock()
+        mock_choice.message.content = None
+        mock_resp = MagicMock()
+        mock_resp.choices = [mock_choice]
+        mock_openai.chat = MagicMock()
+        mock_openai.chat.completions = MagicMock()
+        mock_openai.chat.completions.create = AsyncMock(return_value=mock_resp)
+        result = await client.complete("prompt")
+        assert result == ""

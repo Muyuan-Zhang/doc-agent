@@ -23,6 +23,16 @@ def _assert_uuid(value: str) -> None:
         raise ValueError(f"doc_id must be a UUID v4, got {value!r}")
 
 
+_SAFE_FILTER_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
+
+def _safe_filter_str(value: str, field: str = "value") -> None:
+    if not _SAFE_FILTER_RE.match(value):
+        raise ValueError(
+            f"{field} must be 1-64 alphanumeric characters, underscores, or hyphens"
+        )
+
+
 class MilvusClient(AbstractClient):
     """
     Milvus 客户端。所有 collection 操作通过 alias 路由，
@@ -142,9 +152,78 @@ class MilvusClient(AbstractClient):
                 entity = {f: hit.entity.get(f) for f in output_fields}
                 entity["score"] = hit.score
                 hits.append(entity)
+    async def ensure_memory_collection(self) -> None:
+        """Idempotently create the memory-vectors collection with HNSW index."""
+        def _ensure() -> None:
+            col_name = settings.memory_milvus_collection
+            if utility.has_collection(col_name, using=self._alias):
+                return
+            fields = [
+                FieldSchema("fact_id", DataType.VARCHAR, max_length=36, is_primary=True, auto_id=False),
+                FieldSchema("user_id", DataType.VARCHAR, max_length=36),
+                FieldSchema("content", DataType.VARCHAR, max_length=4096),
+                FieldSchema("embedding", DataType.FLOAT_VECTOR, dim=settings.embedding_dim),
+            ]
+            schema = CollectionSchema(fields, description="Static memory facts")
+            col = Collection(name=col_name, schema=schema, using=self._alias)
+            col.create_index(
+                field_name="embedding",
+                index_params={
+                    "metric_type": "COSINE",
+                    "index_type": "HNSW",
+                    "params": {"M": 16, "efConstruction": 200},
+                },
+            )
+            col.load()
+            logger.info("Milvus memory collection created: %s", col_name)
+
+        await self._run_sync(_ensure)
+
+    async def memory_insert(self, entities: list[dict]) -> list[str]:
+        """Insert static-fact entities into the memory collection."""
+        def _insert() -> list[str]:
+            col = Collection(settings.memory_milvus_collection, using=self._alias)
+            result = col.insert(entities)
+            return [str(pk) for pk in result.primary_keys]
+
+        return await self._run_sync(_insert)
+
+    async def memory_search(
+        self, query_embedding: list[float], user_id: str, top_k: int
+    ) -> list[dict]:
+        """ANN search filtered by user_id; returns list of hit dicts."""
+        _safe_filter_str(user_id, "user_id")
+
+        def _search() -> list[dict]:
+            col = Collection(settings.memory_milvus_collection, using=self._alias)
+            results = col.search(
+                data=[query_embedding],
+                anns_field="embedding",
+                param={"metric_type": "COSINE", "params": {"ef": 64}},
+                limit=top_k,
+                expr=f'user_id == "{user_id}"',
+                output_fields=["fact_id", "user_id", "content"],
+            )
+            hits = []
+            for hit in results[0]:
+                hits.append({
+                    "fact_id": hit.entity.get("fact_id"),
+                    "user_id": hit.entity.get("user_id"),
+                    "content": hit.entity.get("content"),
+                })
             return hits
 
         return await self._run_sync(_search)
+
+    async def memory_delete(self, fact_id: str) -> None:
+        """Delete a memory vector by fact_id."""
+        _assert_uuid(fact_id)
+
+        def _delete() -> None:
+            col = Collection(settings.memory_milvus_collection, using=self._alias)
+            col.delete(expr=f'fact_id == "{fact_id}"')
+
+        await self._run_sync(_delete)
 
     async def query_ids_by_doc_id(self, doc_id: str) -> list[str]:
         """Return all chunk_ids stored for a given document."""

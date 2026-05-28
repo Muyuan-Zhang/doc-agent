@@ -3,6 +3,7 @@ import logging
 
 from fastapi import FastAPI
 
+from app.cache.service import RagCacheService
 from app.clients.llm import OpenAILLMClient
 from app.clients.milvus import MilvusClient
 from app.clients.mq import RedisStreamsMQClient
@@ -17,8 +18,10 @@ from app.retrieval.reranker import LLMReranker
 from app.retrieval.router import router as retrieval_router
 from app.retrieval.vector import VectorStrategy
 from app.routers.agent import router as agent_router
+from app.routers.cache import router as cache_router
 from app.routers.health import router as health_router
 from app.routers.knowledge_base import router as kb_router
+from app.routers.memory import router as memory_router
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +59,8 @@ async def _lifespan(app: FastAPI):
     vector = VectorStrategy(milvus=app.state.milvus, llm=app.state.llm)
     reranker = LLMReranker(llm=app.state.llm)
     app.state.retriever = ConcreteHybridRetriever(bm25=bm25, vector=vector, reranker=reranker)
+    # Build singleton services after all clients are connected.
+    app.state.cache_svc = RagCacheService(redis=app.state.redis, llm=app.state.llm)
 
     yield
 
@@ -74,4 +79,6 @@ def create_app() -> FastAPI:
     app.include_router(agent_router)
     app.include_router(kb_router)
     app.include_router(retrieval_router)
+    app.include_router(memory_router)
+    app.include_router(cache_router)
     return app
