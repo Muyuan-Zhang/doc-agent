@@ -29,16 +29,22 @@ def make_llm_mock() -> MagicMock:
 
 
 def make_redis_mock() -> MagicMock:
-    """Redis mock with all memory-store operations pre-stubbed."""
+    """Redis mock with all memory-store and M4 agent operations pre-stubbed."""
     m = make_client_mock()
     m.cache_key = MagicMock(return_value="v1:memory:recent:test-session")
+    m.increment_with_ttl = AsyncMock(return_value=1)
     inner = MagicMock()
+    # M5 memory operations
     inner.rpush = AsyncMock(return_value=1)
     inner.ltrim = AsyncMock()
     inner.llen = AsyncMock(return_value=1)
     inner.lrange = AsyncMock(return_value=[])
     inner.expire = AsyncMock()
     inner.delete = AsyncMock()
+    # M4 agent job operations
+    inner.hset = AsyncMock()
+    inner.hgetall = AsyncMock(return_value={})
+    inner.setex = AsyncMock()
     m.client = inner
     return m
 

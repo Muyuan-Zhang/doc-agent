@@ -155,34 +155,48 @@ class TestRerank:
         chunk2 = _chunk(chunk_index=1, content="highly relevant fastapi")
         llm = MagicMock()
         llm.complete = AsyncMock(return_value="2, 1")
-        state = _state(reranked_chunks=[chunk1, chunk2], query="fastapi")
+        state = _state(reranked_chunks=[chunk1, chunk2], query="fastapi", rewritten_query="fastapi intro")
 
         result = await rerank(state, llm=llm, retriever=None, redis=None)
 
         assert result["reranked_chunks"][0] == chunk2
         assert result["reranked_chunks"][1] == chunk1
 
-    async def test_falls_back_to_original_order_on_llm_error(self):
+    async def test_falls_back_to_original_order_on_parse_error(self):
         chunk1 = _chunk(chunk_index=0)
         chunk2 = _chunk(chunk_index=1, content="second chunk")
         llm = MagicMock()
-        llm.complete = AsyncMock(side_effect=RuntimeError("LLM timeout"))
-        state = _state(reranked_chunks=[chunk1, chunk2], query="fastapi")
+        llm.complete = AsyncMock(return_value="not, numbers, at, all")
+        state = _state(reranked_chunks=[chunk1, chunk2], query="fastapi", rewritten_query="fastapi intro")
 
         result = await rerank(state, llm=llm, retriever=None, redis=None)
 
         assert result["reranked_chunks"] == [chunk1, chunk2]
 
-    async def test_calls_llm_with_query_context(self):
+    async def test_propagates_llm_communication_errors(self):
+        chunk = _chunk()
+        llm = MagicMock()
+        llm.complete = AsyncMock(side_effect=RuntimeError("LLM timeout"))
+        state = _state(reranked_chunks=[chunk], query="q", rewritten_query="q rewritten")
+
+        with pytest.raises(RuntimeError, match="LLM timeout"):
+            await rerank(state, llm=llm, retriever=None, redis=None)
+
+    async def test_calls_llm_with_rewritten_query_not_original(self):
         chunk = _chunk()
         llm = MagicMock()
         llm.complete = AsyncMock(return_value="1")
-        state = _state(reranked_chunks=[chunk], query="what is fastapi?")
+        state = _state(
+            reranked_chunks=[chunk],
+            query="original query",
+            rewritten_query="optimized rewritten query",
+        )
 
         await rerank(state, llm=llm, retriever=None, redis=None)
 
         prompt_arg = llm.complete.call_args[0][0]
-        assert "what is fastapi?" in prompt_arg
+        assert "optimized rewritten query" in prompt_arg
+        assert "original query" not in prompt_arg
 
 
 # ---------------------------------------------------------------------------

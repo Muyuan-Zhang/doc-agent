@@ -155,13 +155,18 @@ class TestGetJob:
 # GET /agent/stream/{job_id}
 # ---------------------------------------------------------------------------
 
+_VALID_JOB_UUID = "00000000-0000-0000-0000-000000000001"
+_DONE_JOB_UUID  = "00000000-0000-0000-0000-000000000002"
+_MISSING_UUID   = "00000000-0000-0000-0000-000000000099"
+
+
 class TestStreamAnswer:
     async def test_returns_event_stream_content_type(self):
         redis = _make_redis_with_job(status="done", answer="hello world")
         app = make_app(redis=redis)
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-            resp = await c.get("/agent/stream/job-stream-1")
+            resp = await c.get(f"/agent/stream/{_VALID_JOB_UUID}")
 
         assert resp.status_code == 200
         assert "text/event-stream" in resp.headers["content-type"]
@@ -171,7 +176,7 @@ class TestStreamAnswer:
         app = make_app(redis=redis)
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-            resp = await c.get("/agent/stream/job-stream-2")
+            resp = await c.get(f"/agent/stream/{_DONE_JOB_UUID}")
 
         assert "[DONE]" in resp.text
 
@@ -181,6 +186,14 @@ class TestStreamAnswer:
         app = make_app(redis=redis)
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-            resp = await c.get("/agent/stream/nonexistent-job")
+            resp = await c.get(f"/agent/stream/{_MISSING_UUID}")
 
         assert resp.status_code == 404
+
+    async def test_rejects_non_uuid_job_id(self):
+        app = make_app()
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.get("/agent/stream/not-a-uuid")
+
+        assert resp.status_code == 422

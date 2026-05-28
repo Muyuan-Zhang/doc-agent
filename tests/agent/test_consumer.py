@@ -141,8 +141,11 @@ class TestRunConsumer:
             call_count += 1
             if call_count >= 2:
                 raise asyncio.CancelledError()
-            return
-            yield  # make it an async generator
+            # Empty async generator on first call.
+            # The `if False` branch makes this an async generator without
+            # an unreachable statement after return.
+            if False:
+                yield
 
         mq = MagicMock()
         mq.consume = mock_consume

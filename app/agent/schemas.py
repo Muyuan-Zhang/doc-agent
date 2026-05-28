@@ -1,15 +1,19 @@
 from typing import Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class QueryRequest(BaseModel):
-    session_id: str
-    query: str
-    top_k: int = 5
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str = Field(min_length=1)
+    query: str = Field(min_length=1, max_length=4096)
+    top_k: int = Field(default=5, ge=1, le=100)
 
 
 class QueryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     job_id: str
     status: Literal["queued"]
 

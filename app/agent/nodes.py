@@ -14,6 +14,8 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+_MAX_CONTEXT_CHARS = 12_000
+
 
 async def query_rewrite(state: AgentState, *, llm, retriever, redis) -> dict:
     prompt = (
@@ -42,7 +44,7 @@ async def rerank(state: AgentState, *, llm, retriever, redis) -> dict:
 
     numbered = "\n".join(f"{i + 1}. {c.content}" for i, c in enumerate(chunks))
     prompt = (
-        f"Query: {state['query']}\n\n"
+        f"Query: {state['rewritten_query']}\n\n"
         f"Rank these passages by relevance (most relevant first). "
         f"Return only numbers comma-separated, e.g.: 2, 1, 3\n\n"
         f"Passages:\n{numbered}\n\nRanking:"
@@ -55,16 +57,23 @@ async def rerank(state: AgentState, *, llm, retriever, redis) -> dict:
         ranked_set = set(valid)
         remainder = [chunks[i] for i in range(len(chunks)) if i not in ranked_set]
         return {"reranked_chunks": ranked + remainder}
-    except Exception as exc:
-        logger.warning("Rerank LLM call failed, keeping original order: %s", exc)
+    except (ValueError, IndexError) as exc:
+        logger.warning("Rerank parse failed, keeping original order: %s", exc)
         return {"reranked_chunks": chunks}
 
 
 async def generate(state: AgentState, *, llm, retriever, redis) -> dict:
-    context = "\n\n".join(c.content for c in state["reranked_chunks"])
+    raw_context = "\n\n".join(c.content for c in state["reranked_chunks"])
+    if len(raw_context) > _MAX_CONTEXT_CHARS:
+        logger.warning(
+            "Context truncated from %d to %d chars for job %s",
+            len(raw_context), _MAX_CONTEXT_CHARS, state["job_id"],
+        )
+        raw_context = raw_context[:_MAX_CONTEXT_CHARS]
+
     prompt = (
         "You are a helpful assistant. Answer the question using the provided context.\n\n"
-        f"Context:\n{context}\n\n"
+        f"Context:\n{raw_context}\n\n"
         f"Question: {state['query']}\n\nAnswer:"
     )
     answer = await llm.complete(prompt)
@@ -73,6 +82,7 @@ async def generate(state: AgentState, *, llm, retriever, redis) -> dict:
 
 async def cache_write(state: AgentState, *, llm, retriever, redis) -> dict:
     query_hash = hashlib.sha256(state["query"].encode()).hexdigest()[:16]
-    key = redis.cache_key("rag", state["session_id"], query_hash)
+    # Hash tag {rag:<session_id>} ensures Cluster-safe slot routing.
+    key = redis.cache_key(f"{{rag:{state['session_id']}}}", query_hash)
     await redis.client.setex(key, settings.agent_job_ttl_seconds, state["answer"])
     return {}

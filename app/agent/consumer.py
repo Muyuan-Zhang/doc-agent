@@ -7,20 +7,18 @@ the FastAPI lifespan shuts down.
 import asyncio
 import logging
 
+from app.agent._keys import job_key
 from app.clients.mq import MQMessage
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-_JOB_KEY_TPL = "{{agent:job:{job_id}}}"
-
-
-def _job_key(job_id: str) -> str:
-    return _JOB_KEY_TPL.format(job_id=job_id)
+# Re-export so external callers can discover the key format via this module.
+JOB_STATUS_KEY = job_key
 
 
 async def _set_job_status(redis, job_id: str, status: str, **extra) -> None:
-    key = _job_key(job_id)
+    key = job_key(job_id)
     await redis.client.hset(key, mapping={"status": status, **extra})
     await redis.client.expire(key, settings.agent_job_ttl_seconds)
 
@@ -53,7 +51,12 @@ async def _process_message(msg: MQMessage, graph, redis, mq) -> None:
 
 
 async def run_consumer(mq, graph, redis) -> None:
-    """Long-running consumer loop. Cancelled by the app lifespan on shutdown."""
+    """Long-running consumer loop. Cancelled by the app lifespan on shutdown.
+
+    Note: messages within a single batch are processed sequentially.
+    Concurrent processing across batches is deferred to a future iteration
+    as it requires changes to the task lifecycle and test harness.
+    """
     logger.info("MQ consumer started")
     while True:
         try:
