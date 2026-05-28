@@ -64,5 +64,13 @@ class Settings(BaseSettings):
         default_factory=lambda: f"{socket.gethostname()}-{os.getpid()}"
     )
 
+    # M6 Consistency
+    consistency_consumer_group: str = "doc-agent-consistency"
+    consistency_consumer_name: str = Field(
+        default_factory=lambda: f"{socket.gethostname()}-{os.getpid()}-consistency"
+    )
+    cache_rag_namespace: str = "rag"
+    cache_invalidation_scan_batch: int = 100
+
 
 settings = Settings()
