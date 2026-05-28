@@ -59,7 +59,7 @@ class Settings(BaseSettings):
 
     # M3 RAG Cache
     cache_ttl_seconds: int = 3600
-    cache_auto_approve_threshold: int = 1
+    cache_auto_approve_threshold: int = 3
     cache_rewrite_enabled: bool = True
     cache_max_pending_reviews: int = 100
 

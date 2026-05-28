@@ -22,7 +22,7 @@ class RagCacheService:
         cfg: Settings | None = None,
     ) -> None:
         self._cfg = cfg or _default_settings
-        self._store = RagCacheStore(redis)
+        self._store = RagCacheStore(redis, self._cfg)
         self._rewriter = QueryRewriter(llm, self._cfg)
         self._review = ReviewQueue(redis, self._store, self._cfg)
 
@@ -71,8 +71,4 @@ class RagCacheService:
         return chunks, False
 
     async def _inc_stat(self, stat: str) -> None:
-        key = self._store._redis.cache_key("stats", stat)
-        try:
-            await self._store._redis.client.incr(key)
-        except Exception as exc:
-            logger.warning("cache=stat_failed stat=%s error=%s", stat, exc)
+        await self._store.increment_stat(stat)

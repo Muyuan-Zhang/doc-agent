@@ -35,3 +35,4 @@ class ReviewEntry(BaseModel):
     status: CacheStatus
     approval_count: int
     created_at: datetime
+    approved_by: list[str] = Field(default_factory=list)

@@ -28,6 +28,8 @@ def _make_redis() -> tuple[RedisClient, MagicMock]:
     inner = MagicMock()
     inner.get = AsyncMock(return_value=None)
     inner.setex = AsyncMock(return_value=True)
+    inner.set = AsyncMock(return_value=True)   # acquire_lock
+    inner.eval = AsyncMock(return_value=1)     # release_lock Lua script
     inner.delete = AsyncMock(return_value=1)
     inner.ttl = AsyncMock(return_value=3600)
     inner.scan = AsyncMock(return_value=(0, []))
@@ -199,6 +201,16 @@ class TestRagCacheStoreUpdateStatus:
         await store.update_status("deadbeefcafe0000", CacheStatus.REJECTED)
         ttl_used = inner.setex.call_args.args[1]
         assert ttl_used == 3600
+
+    async def test_returns_false_when_lock_not_acquired(self):
+        redis, inner = _make_redis()
+        entry = _make_entry(status=CacheStatus.PENDING_REVIEW)
+        inner.get = AsyncMock(return_value=entry.model_dump_json())
+        inner.set = AsyncMock(return_value=None)  # lock not acquired
+        store = RagCacheStore(redis)
+        result = await store.update_status("deadbeefcafe0000", CacheStatus.APPROVED)
+        assert result is False
+        inner.setex.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

@@ -32,6 +32,8 @@ def _make_redis() -> tuple[RedisClient, MagicMock]:
     inner.lrem = AsyncMock(return_value=1)
     inner.get = AsyncMock(return_value=None)
     inner.setex = AsyncMock(return_value=True)
+    inner.set = AsyncMock(return_value=True)   # acquire_lock
+    inner.eval = AsyncMock(return_value=1)     # release_lock Lua script
     inner.ttl = AsyncMock(return_value=3600)
     client._client = inner
     return client, inner
@@ -65,7 +67,7 @@ def _make_cfg(**overrides) -> Settings:
 
 def _make_queue(redis, inner, **cfg_overrides) -> tuple[ReviewQueue, RagCacheStore]:
     cfg = _make_cfg(**cfg_overrides)
-    store = RagCacheStore(redis)
+    store = RagCacheStore(redis, cfg)
     queue = ReviewQueue(redis, store, cfg)
     return queue, store
 

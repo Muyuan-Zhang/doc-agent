@@ -27,6 +27,8 @@ def _make_redis() -> tuple[RedisClient, MagicMock]:
     inner = MagicMock()
     inner.get = AsyncMock(return_value=None)
     inner.setex = AsyncMock(return_value=True)
+    inner.set = AsyncMock(return_value=True)   # acquire_lock
+    inner.eval = AsyncMock(return_value=1)     # release_lock Lua script
     inner.delete = AsyncMock(return_value=1)
     inner.ttl = AsyncMock(return_value=3600)
     inner.llen = AsyncMock(return_value=0)

@@ -39,7 +39,7 @@ class QueryRewriter:
                 prompt = (
                     "Rewrite the following search query into a canonical, concise form. "
                     "Return only the rewritten query, no explanation.\n\n"
-                    f"Query: {query}"
+                    f"Query: {normalized}"
                 )
                 rewritten = await self._llm.complete(prompt, max_tokens=64)
                 if rewritten:

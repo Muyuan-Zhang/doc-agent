@@ -110,7 +110,11 @@ def make_cache_redis_mock(entry=None) -> MagicMock:
     inner.ttl = AsyncMock(return_value=3600)
     inner.incr = AsyncMock(return_value=1)
     inner.scan = AsyncMock(return_value=(0, []))
+    inner.set = AsyncMock(return_value=True)
+    inner.eval = AsyncMock(return_value=1)
     m.client = inner
+    m.acquire_lock = AsyncMock(return_value=(True, "mock-token"))
+    m.release_lock = AsyncMock(return_value=True)
     return m
 
 
