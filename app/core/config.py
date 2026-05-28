@@ -51,6 +51,12 @@ class Settings(BaseSettings):
     # LLM concurrency: three independent semaphore buckets
     llm_semaphore_limits: LLMSemaphoreLimits = LLMSemaphoreLimits()
 
+    # M2 Retrieval
+    bm25_top_k: int = 20
+    vector_top_k: int = 20
+    rrf_k: int = 60
+    rerank_top_n: int = 10
+    final_top_k: int = 5
     # M5 Memory
     memory_recent_max_turns: int = 20
     memory_recent_ttl_seconds: int = 86400

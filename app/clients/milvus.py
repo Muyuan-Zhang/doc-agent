@@ -80,6 +80,7 @@ class MilvusClient(AbstractClient):
                 FieldSchema("chunk_index", DataType.INT64),
                 FieldSchema("version", DataType.VARCHAR, max_length=100),
                 FieldSchema("content", DataType.VARCHAR, max_length=4096),
+                FieldSchema("content_hash", DataType.VARCHAR, max_length=64),
                 FieldSchema("embedding", DataType.FLOAT_VECTOR, dim=settings.embedding_dim),
             ]
             schema = CollectionSchema(fields, description="Knowledge base chunks")
@@ -123,6 +124,34 @@ class MilvusClient(AbstractClient):
 
         await self._run_sync(_delete)
 
+    async def search(
+        self,
+        *,
+        embedding: list[float],
+        top_k: int,
+        output_fields: list[str] | None = None,
+    ) -> list[dict]:
+        """HNSW cosine similarity search; returns list of field-value dicts per hit."""
+        if output_fields is None:
+            output_fields = [
+                "chunk_id", "doc_id", "section_id", "chunk_index",
+                "version", "content", "content_hash",
+            ]
+
+        def _search() -> list[dict]:
+            col = Collection(settings.milvus_kb_collection, using=self._alias)
+            results = col.search(
+                data=[embedding],
+                anns_field="embedding",
+                param={"metric_type": "COSINE", "params": {"ef": 64}},
+                limit=top_k,
+                output_fields=output_fields,
+            )
+            hits = []
+            for hit in results[0]:
+                entity = {f: hit.entity.get(f) for f in output_fields}
+                entity["score"] = hit.score
+                hits.append(entity)
     async def ensure_memory_collection(self) -> None:
         """Idempotently create the memory-vectors collection with HNSW index."""
         def _ensure() -> None:

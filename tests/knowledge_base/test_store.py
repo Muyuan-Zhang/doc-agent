@@ -163,6 +163,23 @@ class TestSaveChunksMeta:
         row = conn.execute.call_args[0][1][0]
         assert row["chunk_id"] == "doc-1:s0000:000002"
 
+    async def test_row_has_content(self):
+        pg, conn = _make_pg()
+        chunk = _make_chunk(0)
+        await KnowledgeBaseStore().save_chunks_meta([chunk], pg)
+        row = conn.execute.call_args[0][1][0]
+        assert row["content"] == "text"
+
+
+class TestDDLSchema:
+    def test_ddl_includes_content_column(self):
+        from app.knowledge_base.store import _DDL
+        assert "content" in _DDL
+
+    def test_ddl_includes_gin_index(self):
+        from app.knowledge_base.store import _DDL
+        assert "gin" in _DDL.lower()
+
 
 # ---------------------------------------------------------------------------
 # save_vectors
