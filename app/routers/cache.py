@@ -1,7 +1,8 @@
 import asyncio
 import logging
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Path, Query, Request
 from pydantic import BaseModel, Field
 
 from app.cache.schemas import CacheStatus
@@ -9,6 +10,9 @@ from app.cache.service import RagCacheService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/cache", tags=["cache"])
+
+# Validated path type — all query_hash values are 16-char lowercase hex strings
+QueryHash = Annotated[str, Path(pattern=r"^[0-9a-f]{16}$")]
 
 
 def _svc(request: Request) -> RagCacheService:
@@ -54,7 +58,7 @@ async def list_pending_reviews(
 # TODO(M4): add authentication dependency to restrict to authorised reviewers
 async def approve_entry(
     request: Request,
-    query_hash: str,
+    query_hash: QueryHash,
     body: ApproveBody,
 ) -> dict:
     svc = _svc(request)
@@ -67,7 +71,7 @@ async def approve_entry(
 
 @router.post("/review/{query_hash}/reject", status_code=204)
 # TODO(M4): add authentication dependency to restrict to authorised reviewers
-async def reject_entry(request: Request, query_hash: str) -> None:
+async def reject_entry(request: Request, query_hash: QueryHash) -> None:
     svc = _svc(request)
     entry = await svc.store.get(query_hash)
     if entry is None:
@@ -77,7 +81,7 @@ async def reject_entry(request: Request, query_hash: str) -> None:
 
 @router.delete("/{query_hash}", status_code=204)
 # TODO(M4): add authentication dependency to restrict to authorised reviewers
-async def delete_entry(request: Request, query_hash: str) -> None:
+async def delete_entry(request: Request, query_hash: QueryHash) -> None:
     svc = _svc(request)
     deleted = await svc.store.delete(query_hash)
     if not deleted:

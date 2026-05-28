@@ -214,6 +214,43 @@ class TestReviewQueueApprove:
         assert updated.approval_count == 1
         assert "reviewer-1" in updated.approved_by
 
+    async def test_returns_pending_when_lock_not_acquired(self):
+        redis, inner = _make_redis()
+        inner.set = AsyncMock(return_value=None)  # lock fails
+        queue, _ = _make_queue(redis, inner)
+        status = await queue.approve("deadbeefcafe0000", "reviewer-1")
+        assert status == CacheStatus.PENDING_REVIEW
+        inner.setex.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# reject() idempotency / status-guard
+# ---------------------------------------------------------------------------
+
+class TestReviewQueueRejectGuards:
+    async def test_reject_is_noop_when_already_rejected(self):
+        redis, inner = _make_redis()
+        entry = _make_entry(status=CacheStatus.REJECTED)
+        inner.get = AsyncMock(return_value=entry.model_dump_json())
+        queue, _ = _make_queue(redis, inner)
+        await queue.reject("deadbeefcafe0000")
+        inner.setex.assert_not_awaited()
+
+    async def test_reject_is_noop_when_entry_missing(self):
+        redis, inner = _make_redis()
+        inner.get = AsyncMock(return_value=None)
+        queue, _ = _make_queue(redis, inner)
+        await queue.reject("deadbeefcafe0000")
+        inner.setex.assert_not_awaited()
+
+    async def test_reject_does_not_overwrite_approved_entry(self):
+        redis, inner = _make_redis()
+        entry = _make_entry(status=CacheStatus.APPROVED)
+        inner.get = AsyncMock(return_value=entry.model_dump_json())
+        queue, _ = _make_queue(redis, inner)
+        await queue.reject("deadbeefcafe0000")
+        inner.setex.assert_not_awaited()
+
 
 # ---------------------------------------------------------------------------
 # reject()

@@ -136,11 +136,11 @@ class TestRagCacheStoreSet:
     async def test_key_contains_rag_cache_and_hash(self):
         redis, inner = _make_redis()
         store = RagCacheStore(redis)
-        entry = _make_entry(query_hash="hashxyz123")
+        entry = _make_entry(query_hash="0123456789abcdef")
         await store.set(entry, ttl=100)
         key = inner.setex.call_args.args[0]
         assert "rag_cache" in key
-        assert "hashxyz123" in key
+        assert "0123456789abcdef" in key
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +207,16 @@ class TestRagCacheStoreUpdateStatus:
         entry = _make_entry(status=CacheStatus.PENDING_REVIEW)
         inner.get = AsyncMock(return_value=entry.model_dump_json())
         inner.set = AsyncMock(return_value=None)  # lock not acquired
+        store = RagCacheStore(redis)
+        result = await store.update_status("deadbeefcafe0000", CacheStatus.APPROVED)
+        assert result is False
+        inner.setex.assert_not_awaited()
+
+    async def test_returns_false_when_entry_expired_between_get_and_ttl(self):
+        redis, inner = _make_redis()
+        entry = _make_entry()
+        inner.get = AsyncMock(return_value=entry.model_dump_json())
+        inner.ttl = AsyncMock(return_value=-2)  # key gone by TTL check
         store = RagCacheStore(redis)
         result = await store.update_status("deadbeefcafe0000", CacheStatus.APPROVED)
         assert result is False

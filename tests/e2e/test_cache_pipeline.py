@@ -151,7 +151,7 @@ class TestCacheApproveEndpoint:
         app = make_app(redis=redis, llm=make_llm_mock())
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             r = await c.post(
-                "/cache/review/nonexistenthash000/approve",
+                "/cache/review/0000000000000000/approve",
                 json={"reviewer_id": "admin-1"},
             )
         assert r.status_code == 404
@@ -171,7 +171,7 @@ class TestCacheApproveEndpoint:
         redis = make_cache_redis_mock()
         app = make_app(redis=redis, llm=make_llm_mock())
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-            r = await c.post("/cache/review/somehash/approve")
+            r = await c.post("/cache/review/0000000000000000/approve")
         assert r.status_code == 422
 
 
@@ -192,7 +192,7 @@ class TestCacheRejectEndpoint:
         redis = make_cache_redis_mock()
         app = make_app(redis=redis, llm=make_llm_mock())
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-            r = await c.post("/cache/review/badkey123456789/reject")
+            r = await c.post("/cache/review/0000000000000000/reject")
         assert r.status_code == 404
 
 
@@ -206,7 +206,7 @@ class TestCacheDeleteEndpoint:
         redis.client.delete = AsyncMock(return_value=1)
         app = make_app(redis=redis, llm=make_llm_mock())
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-            r = await c.delete("/cache/abc123")
+            r = await c.delete("/cache/0123456789abcdef")
         assert r.status_code == 204
 
     async def test_returns_404_when_key_not_found(self):
@@ -214,7 +214,7 @@ class TestCacheDeleteEndpoint:
         redis.client.delete = AsyncMock(return_value=0)
         app = make_app(redis=redis, llm=make_llm_mock())
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-            r = await c.delete("/cache/nonexistent")
+            r = await c.delete("/cache/0000000000000000")
         assert r.status_code == 404
 
 

@@ -17,6 +17,9 @@ class RagCacheStore:
     def _entry_key(self, query_hash: str) -> str:
         return self._redis.cache_key("rag_cache", query_hash)
 
+    def _lock_key(self, query_hash: str) -> str:
+        return self._redis.cache_key("rag_cache_lock", query_hash)
+
     async def get(self, query_hash: str) -> CacheEntry | None:
         raw = await self._redis.client.get(self._entry_key(query_hash))
         if raw is None:
@@ -36,6 +39,31 @@ class RagCacheStore:
             entry.query_hash, entry.status.value, ttl,
         )
 
+    async def update_status_under_lock(
+        self,
+        query_hash: str,
+        new_status: CacheStatus,
+        approval_count: int | None = None,
+        approved_by: list[str] | None = None,
+    ) -> bool:
+        """Apply a status update without acquiring the lock. Caller MUST hold the lock."""
+        existing = await self.get(query_hash)
+        if existing is None:
+            return False
+        data = existing.model_dump()
+        data["status"] = new_status
+        if approval_count is not None:
+            data["approval_count"] = approval_count
+        if approved_by is not None:
+            data["approved_by"] = approved_by
+        updated = CacheEntry.model_validate(data)
+        ttl = await self._redis.client.ttl(self._entry_key(query_hash))
+        if ttl == -2:
+            # Entry expired between get() and TTL lookup — do not reanimate
+            return False
+        await self.set(updated, ttl if ttl > 0 else self._cfg.cache_ttl_seconds)
+        return True
+
     async def update_status(
         self,
         query_hash: str,
@@ -43,27 +71,16 @@ class RagCacheStore:
         approval_count: int | None = None,
         approved_by: list[str] | None = None,
     ) -> bool:
-        lock_key = self._redis.cache_key("rag_cache_lock", query_hash)
-        acquired, token = await self._redis.acquire_lock(lock_key, ttl_seconds=10)
+        acquired, token = await self._redis.acquire_lock(self._lock_key(query_hash), ttl_seconds=10)
         if not acquired:
             logger.warning("cache_store=update_status_lock_failed hash=%s", query_hash)
             return False
         try:
-            existing = await self.get(query_hash)
-            if existing is None:
-                return False
-            data = existing.model_dump()
-            data["status"] = new_status
-            if approval_count is not None:
-                data["approval_count"] = approval_count
-            if approved_by is not None:
-                data["approved_by"] = approved_by
-            updated = CacheEntry.model_validate(data)
-            ttl = await self._redis.client.ttl(self._entry_key(query_hash))
-            await self.set(updated, ttl if ttl > 0 else self._cfg.cache_ttl_seconds)
-            return True
+            return await self.update_status_under_lock(
+                query_hash, new_status, approval_count, approved_by
+            )
         finally:
-            await self._redis.release_lock(lock_key, token)
+            await self._redis.release_lock(self._lock_key(query_hash), token)
 
     async def delete(self, query_hash: str) -> bool:
         result = await self._redis.client.delete(self._entry_key(query_hash))

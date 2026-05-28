@@ -15,7 +15,7 @@ class CacheStatus(str, Enum):
 class CacheEntry(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    query_hash: str
+    query_hash: str = Field(pattern=r"^[0-9a-f]{16}$")
     original_query: str
     normalized_query: str
     chunks: list[ChunkSchema]

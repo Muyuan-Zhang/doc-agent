@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 # Match word chars + CJK unified ideographs + Hiragana/Katakana
 _KEEP_PATTERN = re.compile(r"[^\w\s一-鿿぀-ヿ㐀-䶿]")
 
+# Hard cap on characters sent to LLM to limit prompt-injection surface
+_REWRITE_MAX_CHARS = 512
+
 
 class QueryRewriter:
     def __init__(self, llm: "AbstractLLMClient", cfg: Settings | None = None) -> None:
@@ -36,14 +39,18 @@ class QueryRewriter:
         normalized = self.normalize(query)
         if self._cfg.cache_rewrite_enabled:
             try:
+                safe_input = normalized[:_REWRITE_MAX_CHARS]
                 prompt = (
                     "Rewrite the following search query into a canonical, concise form. "
                     "Return only the rewritten query, no explanation.\n\n"
-                    f"Query: {normalized}"
+                    "--- QUERY START ---\n"
+                    f"{safe_input}\n"
+                    "--- QUERY END ---"
                 )
                 rewritten = await self._llm.complete(prompt, max_tokens=64)
                 if rewritten:
                     normalized = self.normalize(rewritten) or normalized
             except Exception as exc:
-                logger.warning("cache=rewrite_failed fallback=normalize error=%s", exc)
+                # Log only the exception type to avoid embedding the prompt in logs
+                logger.warning("cache=rewrite_failed fallback=normalize error=%s", type(exc).__name__)
         return normalized, self.hash_query(normalized)
