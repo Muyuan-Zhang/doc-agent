@@ -85,6 +85,35 @@ def make_app(*, postgres=None, redis=None, milvus=None, mq=None, llm=None):
     return app
 
 
+def make_cache_redis_mock(entry=None) -> MagicMock:
+    """Redis mock for M3 cache tests.
+
+    Uses a real cache_key side_effect so key routing is correct.
+    Accepts an optional CacheEntry to pre-populate get/lrange stubs.
+    """
+    from app.core.config import settings
+
+    m = make_client_mock()
+    m.cache_key = MagicMock(
+        side_effect=lambda ns, *parts: f"{settings.knowledge_base_version}:{ns}:{':'.join(parts)}"
+    )
+    inner = MagicMock()
+    inner.get = AsyncMock(return_value=entry.model_dump_json() if entry else None)
+    inner.setex = AsyncMock(return_value=True)
+    inner.delete = AsyncMock(return_value=1)
+    inner.llen = AsyncMock(return_value=0)
+    inner.lrange = AsyncMock(
+        return_value=[] if entry is None else [entry.query_hash]
+    )
+    inner.lpush = AsyncMock(return_value=1)
+    inner.lrem = AsyncMock(return_value=1)
+    inner.ttl = AsyncMock(return_value=3600)
+    inner.incr = AsyncMock(return_value=1)
+    inner.scan = AsyncMock(return_value=(0, []))
+    m.client = inner
+    return m
+
+
 @pytest.fixture
 def base_app():
     """App with all healthy mocked clients."""
