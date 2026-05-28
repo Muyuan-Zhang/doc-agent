@@ -57,12 +57,21 @@ async def summarize_session(
     user_id: str = Query(...),
     request: Request = None,
 ) -> MemorySummary:
-    return await _svc(request).summarize_session(session_id, user_id)
+    try:
+        return await _svc(request).summarize_session(session_id, user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/static", response_model=StaticFact, status_code=status.HTTP_201_CREATED)
 async def add_static_fact(body: AddFactRequest, request: Request) -> StaticFact:
-    return await _svc(request).add_static_fact(body.user_id, body.content)
+    try:
+        return await _svc(request).add_static_fact(body.user_id, body.content)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("add_static_fact failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to add static fact") from exc
 
 
 @router.delete("/static/{fact_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -1,4 +1,4 @@
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -20,6 +20,8 @@ class MemorySummary(BaseModel):
     session_id: str
     summary_text: str
     content_hash: str
+    importance_score: float = 1.0
+    structured_facts: dict[str, Any] = {}
 
 
 class StaticFact(BaseModel):
@@ -29,6 +31,7 @@ class StaticFact(BaseModel):
     user_id: str
     content: str
     content_hash: str
+    importance_weight: float = 1.0
     embedding: Optional[list[float]] = None
 
 

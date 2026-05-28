@@ -121,13 +121,24 @@ class TestGetContextEndpoint:
         assert r.status_code == 422
 
     async def test_summary_included_when_pg_has_row(self):
-        row = ("sum-1", "user-1", "sess-1", "Prior context.", "a" * 64)
+        row = ("sum-1", "user-1", "sess-1", "Prior context.", "a" * 64, 1.0, {})
         pg = make_pg_mock(fetchone=row)
         app = make_app(postgres=pg)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             r = await c.get("/memory/context/sess-1", params={"user_id": "user-1"})
         assert r.status_code == 200
         assert r.json()["summary"]["summary_text"] == "Prior context."
+
+    async def test_summary_includes_structured_facts(self):
+        row = ("sum-1", "user-1", "sess-1", "Tech discussion.", "a" * 64, 1.0,
+               {"key_topics": ["python", "fastapi"]})
+        pg = make_pg_mock(fetchone=row)
+        app = make_app(postgres=pg)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.get("/memory/context/sess-1", params={"user_id": "user-1"})
+        assert r.status_code == 200
+        summary = r.json()["summary"]
+        assert summary["structured_facts"] == {"key_topics": ["python", "fastapi"]}
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +148,10 @@ class TestGetContextEndpoint:
 class TestSummarizeEndpoint:
     async def test_returns_200_with_summary(self):
         app, redis, pg, milvus, llm = _app_with_memory()
+        # Compact requires at least one turn; pre-populate Redis mock.
+        redis.client.lrange = __import__("unittest.mock", fromlist=["AsyncMock"]).AsyncMock(
+            return_value=[_turn_json("discuss architecture")]
+        )
         llm.complete = __import__("unittest.mock", fromlist=["AsyncMock"]).AsyncMock(
             return_value="Key decisions: A and B."
         )
@@ -148,6 +163,24 @@ class TestSummarizeEndpoint:
         assert body["summary_text"] == "Key decisions: A and B."
         assert body["user_id"] == "user-1"
         assert body["session_id"] == "sess-1"
+
+    async def test_returns_400_when_no_turns_and_no_previous(self):
+        app, *_ = _app_with_memory()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post("/memory/summarize/sess-1", params={"user_id": "user-1"})
+        assert r.status_code == 400
+
+    async def test_returns_existing_summary_when_no_new_turns(self):
+        # H2 fix: compact() returns previous_summary unchanged when turns are empty.
+        row = ("sum-prev", "user-1", "sess-1", "Previous summary text.", "a" * 64, 1.0, {})
+        pg = make_pg_mock(fetchone=row)
+        app = make_app(postgres=pg)  # lrange returns [] by default
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post("/memory/summarize/sess-1", params={"user_id": "user-1"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["summary_id"] == "sum-prev"
+        assert body["summary_text"] == "Previous summary text."
 
     async def test_missing_user_id_returns_422(self):
         app, *_ = _app_with_memory()
@@ -186,6 +219,17 @@ class TestAddStaticFactEndpoint:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             r = await c.post("/memory/static", json={"content": "some fact"})
         assert r.status_code == 422
+
+    async def test_returns_500_when_embed_fails(self):
+        from unittest.mock import AsyncMock
+        app, redis, pg, milvus, llm = _app_with_memory()
+        llm.embed = AsyncMock(side_effect=RuntimeError("embedding service unavailable"))
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post("/memory/static", json={
+                "user_id": "user-1",
+                "content": "A fact that cannot be embedded.",
+            })
+        assert r.status_code == 500
 
 
 # ---------------------------------------------------------------------------

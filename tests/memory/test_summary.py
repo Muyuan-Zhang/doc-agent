@@ -1,10 +1,11 @@
 """Unit tests for SummaryMemoryStore."""
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from app.memory.schemas import ConversationTurn, MemorySummary
-from app.memory.summary import SummaryMemoryStore
+from app.memory.summary import SummaryMemoryStore, _MAX_INPUT_TURNS
 
 
 def _make_pg(fetchone_return=None):
@@ -49,31 +50,48 @@ def _make_turns(n: int = 3) -> list[ConversationTurn]:
         for i in range(n)
     ]
 
+# Row now has 7 columns: id, user_id, session_id, text, hash, importance_score, structured_facts
+_FULL_ROW = ("sum-1", "user-1", "sess-1", "A summary.", "hash" * 16, 1.0, {})
+
 
 class TestGetLatestSummary:
     async def test_returns_none_when_no_rows(self):
         pg, _ = _make_pg(fetchone_return=None)
         store = SummaryMemoryStore()
-        result = await store.get_latest_summary(pg, "user-1")
+        result = await store.get_latest_summary(pg, "user-1", "sess-1")
         assert result is None
 
     async def test_returns_summary_from_row(self):
-        row = ("sum-1", "user-1", "sess-1", "A summary.", "hash" * 16)
-        pg, _ = _make_pg(fetchone_return=row)
+        pg, _ = _make_pg(fetchone_return=_FULL_ROW)
         store = SummaryMemoryStore()
-        result = await store.get_latest_summary(pg, "user-1")
+        result = await store.get_latest_summary(pg, "user-1", "sess-1")
         assert result is not None
         assert result.summary_id == "sum-1"
         assert result.user_id == "user-1"
         assert result.summary_text == "A summary."
 
-    async def test_queries_by_user_id(self):
+    async def test_queries_by_user_id_and_session_id(self):
         pg, conn = _make_pg(fetchone_return=None)
         store = SummaryMemoryStore()
-        await store.get_latest_summary(pg, "user-xyz")
+        await store.get_latest_summary(pg, "user-xyz", "sess-abc")
         conn.execute.assert_awaited_once()
         params = conn.execute.call_args[0][1]
         assert params["user_id"] == "user-xyz"
+        assert params["session_id"] == "sess-abc"
+
+    async def test_returns_importance_score(self):
+        row = (*_FULL_ROW[:5], 0.8, {})
+        pg, _ = _make_pg(fetchone_return=row)
+        store = SummaryMemoryStore()
+        result = await store.get_latest_summary(pg, "user-1", "sess-1")
+        assert result.importance_score == 0.8
+
+    async def test_returns_structured_facts(self):
+        row = (*_FULL_ROW[:5], 1.0, {"key_topics": ["python", "testing"]})
+        pg, _ = _make_pg(fetchone_return=row)
+        store = SummaryMemoryStore()
+        result = await store.get_latest_summary(pg, "user-1", "sess-1")
+        assert result.structured_facts == {"key_topics": ["python", "testing"]}
 
 
 class TestSaveSummary:
@@ -94,6 +112,19 @@ class TestSaveSummary:
         store = SummaryMemoryStore()
         await store.save_summary(pg, _make_summary())
         pg.engine.begin.assert_called_once()
+
+    async def test_saves_structured_facts_as_json(self):
+        pg, conn = _make_pg()
+        store = SummaryMemoryStore()
+        summary = MemorySummary(
+            summary_id="s1", user_id="u", session_id="s",
+            summary_text="t", content_hash="a" * 64,
+            structured_facts={"key_topics": ["a", "b"]},
+        )
+        await store.save_summary(pg, summary)
+        params = conn.execute.call_args[0][1]
+        parsed = json.loads(params["structured_facts"])
+        assert parsed["key_topics"] == ["a", "b"]
 
 
 class TestCompact:
@@ -136,3 +167,70 @@ class TestCompact:
         store = SummaryMemoryStore()
         await store.compact(pg, _make_llm(), "u", "s", _make_turns(1))
         conn.execute.assert_awaited_once()
+
+    async def test_parses_json_from_llm(self):
+        llm_json = json.dumps({
+            "summary_text": "Parsed summary.",
+            "key_topics": ["topic-a", "topic-b"],
+        })
+        pg, _ = _make_pg()
+        store = SummaryMemoryStore()
+        result = await store.compact(pg, _make_llm(llm_json), "u", "s", _make_turns(2))
+        assert result.summary_text == "Parsed summary."
+        assert result.structured_facts == {"key_topics": ["topic-a", "topic-b"]}
+
+    async def test_falls_back_when_llm_returns_plain_text(self):
+        pg, _ = _make_pg()
+        store = SummaryMemoryStore()
+        result = await store.compact(pg, _make_llm("plain text"), "u", "s", _make_turns(1))
+        assert result.summary_text == "plain text"
+        assert result.structured_facts == {}
+
+    async def test_includes_previous_summary_in_prompt(self):
+        previous = MemorySummary(
+            summary_id="prev", user_id="u", session_id="s",
+            summary_text="Earlier context.", content_hash="b" * 64,
+        )
+        pg, _ = _make_pg()
+        llm = _make_llm("new summary")
+        store = SummaryMemoryStore()
+        await store.compact(pg, llm, "u", "s", _make_turns(2), previous_summary=previous)
+        prompt = llm.complete.call_args[0][0]
+        assert "Earlier context." in prompt
+
+    async def test_caps_input_at_max_turns(self):
+        pg, _ = _make_pg()
+        llm = _make_llm("summary")
+        store = SummaryMemoryStore()
+        many_turns = _make_turns(_MAX_INPUT_TURNS + 5)
+        await store.compact(pg, llm, "u", "s", many_turns)
+        prompt = llm.complete.call_args[0][0]
+        # The first 5 turns should be excluded (windowed to last _MAX_INPUT_TURNS)
+        assert f"msg{_MAX_INPUT_TURNS - 1}" in prompt
+        assert "msg0" not in prompt
+
+    async def test_returns_previous_summary_when_turns_empty(self):
+        prev = MemorySummary(
+            summary_id="prev", user_id="u", session_id="s",
+            summary_text="existing summary", content_hash="a" * 64,
+        )
+        pg, _ = _make_pg()
+        llm = _make_llm()
+        store = SummaryMemoryStore()
+        result = await store.compact(pg, llm, "u", "s", [], previous_summary=prev)
+        assert result is prev
+        llm.complete.assert_not_awaited()
+
+    async def test_raises_when_turns_empty_and_no_previous(self):
+        pg, _ = _make_pg()
+        store = SummaryMemoryStore()
+        with pytest.raises(ValueError, match="no turns"):
+            await store.compact(pg, _make_llm(), "u", "sess-x", [])
+
+    async def test_strips_markdown_fences_from_llm_response(self):
+        fenced = '```json\n{"summary_text": "Fenced summary.", "key_topics": ["a"]}\n```'
+        pg, _ = _make_pg()
+        store = SummaryMemoryStore()
+        result = await store.compact(pg, _make_llm(fenced), "u", "s", _make_turns(1))
+        assert result.summary_text == "Fenced summary."
+        assert result.structured_facts == {"key_topics": ["a"]}
