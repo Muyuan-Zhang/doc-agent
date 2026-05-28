@@ -3,6 +3,7 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.core.exceptions import ValidationError
 from app.models.chunk import ChunkSchema
 
 
@@ -10,6 +11,28 @@ class CacheStatus(str, Enum):
     PENDING_REVIEW = "pending_review"
     APPROVED = "approved"
     REJECTED = "rejected"
+
+
+# Allowed status transitions.  APPROVED is terminal — once approved a cache
+# entry cannot be rejected (prevents silent cache poisoning via race).
+_VALID_TRANSITIONS: dict["CacheStatus", set["CacheStatus"]] = {
+    CacheStatus.PENDING_REVIEW: {CacheStatus.APPROVED, CacheStatus.REJECTED},
+    CacheStatus.APPROVED: set(),
+    CacheStatus.REJECTED: set(),
+}
+
+
+def validate_transition(current: "CacheStatus", new: "CacheStatus") -> None:
+    """Raise ValidationError if the transition current → new is not allowed.
+
+    Same-state transitions are always allowed (no-op update).
+    """
+    if current == new:
+        return
+    if new not in _VALID_TRANSITIONS[current]:
+        raise ValidationError(
+            f"Invalid status transition: {current.value!r} → {new.value!r}"
+        )
 
 
 class CacheEntry(BaseModel):

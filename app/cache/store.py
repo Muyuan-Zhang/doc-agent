@@ -1,12 +1,13 @@
 import logging
 
-from app.cache.schemas import CacheEntry, CacheStatus
+from app.cache.schemas import CacheEntry, CacheStatus, validate_transition
 from app.clients.redis import RedisClient
 from app.core.config import Settings, settings as _default_settings
 
 logger = logging.getLogger(__name__)
 
 _SCAN_COUNT = 100
+_STATS_HASH_KEY = "stats"
 
 
 class RagCacheStore:
@@ -20,6 +21,9 @@ class RagCacheStore:
     def _lock_key(self, query_hash: str) -> str:
         return self._redis.cache_key("rag_cache_lock", query_hash)
 
+    def _stats_key(self) -> str:
+        return self._redis.cache_key(_STATS_HASH_KEY, "counters")
+
     async def get(self, query_hash: str) -> CacheEntry | None:
         raw = await self._redis.client.get(self._entry_key(query_hash))
         if raw is None:
@@ -29,6 +33,26 @@ class RagCacheStore:
         except Exception as exc:
             logger.warning("cache_store=deserialize_failed hash=%s error=%s", query_hash, exc)
             return None
+
+    async def get_many(self, hashes: list[str]) -> list[CacheEntry | None]:
+        """Fetch multiple entries in a single pipeline round-trip."""
+        if not hashes:
+            return []
+        pipe = self._redis.client.pipeline()
+        for h in hashes:
+            pipe.get(self._entry_key(h))
+        raws = await pipe.execute()
+        results: list[CacheEntry | None] = []
+        for h, raw in zip(hashes, raws):
+            if raw is None:
+                results.append(None)
+                continue
+            try:
+                results.append(CacheEntry.model_validate_json(raw))
+            except Exception as exc:
+                logger.warning("cache_store=deserialize_failed hash=%s error=%s", h, exc)
+                results.append(None)
+        return results
 
     async def set(self, entry: CacheEntry, ttl: int) -> None:
         await self._redis.client.setex(
@@ -50,6 +74,7 @@ class RagCacheStore:
         existing = await self.get(query_hash)
         if existing is None:
             return False
+        validate_transition(existing.status, new_status)
         data = existing.model_dump()
         data["status"] = new_status
         if approval_count is not None:
@@ -104,21 +129,19 @@ class RagCacheStore:
         return deleted
 
     async def increment_stat(self, stat: str) -> None:
-        key = self._redis.cache_key("stats", stat)
         try:
-            await self._redis.client.incr(key)
+            await self._redis.client.hincrby(self._stats_key(), stat, 1)
         except Exception as exc:
             logger.warning("cache_store=stat_failed stat=%s error=%s", stat, exc)
 
     async def get_stats(self) -> dict:
-        hits_key = self._redis.cache_key("stats", "hits")
-        misses_key = self._redis.cache_key("stats", "misses")
         pending_key = self._redis.cache_key("review", "pending")
-        hits = await self._redis.client.get(hits_key) or "0"
-        misses = await self._redis.client.get(misses_key) or "0"
-        pending = await self._redis.client.llen(pending_key)
+        pipe = self._redis.client.pipeline()
+        pipe.hgetall(self._stats_key())
+        pipe.zcard(pending_key)
+        raw_stats, pending = await pipe.execute()
         return {
-            "hits": int(hits),
-            "misses": int(misses),
+            "hits": int(raw_stats.get("hits", 0)),
+            "misses": int(raw_stats.get("misses", 0)),
             "pending": int(pending),
         }

@@ -40,11 +40,21 @@ def _make_cache_entry(status: CacheStatus = CacheStatus.PENDING_REVIEW) -> Cache
 # GET /cache/stats
 # ---------------------------------------------------------------------------
 
+def _make_stats_pipeline(hits=0, misses=0, pending=0):
+    from unittest.mock import MagicMock, AsyncMock
+    pipe = MagicMock()
+    pipe.hgetall = MagicMock(return_value=pipe)
+    pipe.zcard = MagicMock(return_value=pipe)
+    pipe.execute = AsyncMock(
+        return_value=[{"hits": str(hits), "misses": str(misses)}, pending]
+    )
+    return pipe
+
+
 class TestCacheStatsEndpoint:
     async def test_returns_200_with_stats_fields(self):
         redis = make_cache_redis_mock()
-        redis.client.get = AsyncMock(side_effect=["5", "3"])
-        redis.client.llen = AsyncMock(return_value=2)
+        redis.client.pipeline = MagicMock(return_value=_make_stats_pipeline(5, 3, 2))
         app = make_app(redis=redis, llm=make_llm_mock())
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             r = await c.get("/cache/stats")
@@ -56,8 +66,7 @@ class TestCacheStatsEndpoint:
 
     async def test_returns_zeros_when_no_activity(self):
         redis = make_cache_redis_mock()
-        redis.client.get = AsyncMock(return_value=None)
-        redis.client.llen = AsyncMock(return_value=0)
+        redis.client.pipeline = MagicMock(return_value=_make_stats_pipeline(0, 0, 0))
         app = make_app(redis=redis, llm=make_llm_mock())
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             r = await c.get("/cache/stats")
@@ -67,8 +76,6 @@ class TestCacheStatsEndpoint:
 
     async def test_includes_request_id_header(self):
         redis = make_cache_redis_mock()
-        redis.client.get = AsyncMock(return_value=None)
-        redis.client.llen = AsyncMock(return_value=0)
         app = make_app(redis=redis, llm=make_llm_mock())
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             r = await c.get("/cache/stats")
@@ -89,18 +96,23 @@ class TestCacheStatsEndpoint:
 class TestCacheReviewListEndpoint:
     async def test_returns_empty_list_when_no_pending(self):
         redis = make_cache_redis_mock()
-        redis.client.lrange = AsyncMock(return_value=[])
+        redis.client.zrange = AsyncMock(return_value=[])
         app = make_app(redis=redis, llm=make_llm_mock())
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             r = await c.get("/cache/review")
         assert r.status_code == 200
-        body = r.json()
-        assert body["pending"] == []
-        assert body["total"] == 0
+        assert r.json()["pending"] == []
+        assert r.json()["total"] == 0
 
     async def test_returns_pending_entries(self):
+        from unittest.mock import MagicMock, AsyncMock
         entry = _make_cache_entry()
         redis = make_cache_redis_mock(entry=entry)
+        redis.client.zrange = AsyncMock(return_value=[entry.query_hash])
+        pipe = MagicMock()
+        pipe.get = MagicMock(return_value=pipe)
+        pipe.execute = AsyncMock(return_value=[entry.model_dump_json()])
+        redis.client.pipeline = MagicMock(return_value=pipe)
         app = make_app(redis=redis, llm=make_llm_mock())
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             r = await c.get("/cache/review")
@@ -111,8 +123,14 @@ class TestCacheReviewListEndpoint:
         assert body["pending"][0]["status"] == "pending_review"
 
     async def test_response_includes_chunk_count(self):
+        from unittest.mock import MagicMock, AsyncMock
         entry = _make_cache_entry()
         redis = make_cache_redis_mock(entry=entry)
+        redis.client.zrange = AsyncMock(return_value=[entry.query_hash])
+        pipe = MagicMock()
+        pipe.get = MagicMock(return_value=pipe)
+        pipe.execute = AsyncMock(return_value=[entry.model_dump_json()])
+        redis.client.pipeline = MagicMock(return_value=pipe)
         app = make_app(redis=redis, llm=make_llm_mock())
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             r = await c.get("/cache/review")
@@ -120,7 +138,7 @@ class TestCacheReviewListEndpoint:
 
     async def test_respects_limit_query_param(self):
         redis = make_cache_redis_mock()
-        redis.client.lrange = AsyncMock(return_value=[])
+        redis.client.zrange = AsyncMock(return_value=[])
         app = make_app(redis=redis, llm=make_llm_mock())
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             r = await c.get("/cache/review", params={"limit": 5})

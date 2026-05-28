@@ -171,3 +171,12 @@ class TestRewrite:
         _, h1 = await rw.rewrite("query about deadlines")
         _, h2 = await rw.rewrite("query about budgets")
         assert h1 != h2
+
+    async def test_hash_stable_regardless_of_llm_rewrite(self):
+        """Hash must equal hash(normalize(raw)) even when LLM rewrites the display form."""
+        cfg = _make_cfg(cache_rewrite_enabled=True)
+        llm = _make_llm(complete_return="completely different canonical form")
+        rw = QueryRewriter(llm, cfg)
+        _, query_hash = await rw.rewrite("What is the deadline?")
+        expected_hash = rw.hash_query(rw.normalize("What is the deadline?"))
+        assert query_hash == expected_hash

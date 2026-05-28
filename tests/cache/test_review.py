@@ -2,10 +2,10 @@
 Tests for app/cache/review.py — ReviewQueue.
 
 Covers:
-- enqueue(): pushes hash, respects max capacity, deduplicates
-- list_pending(): returns hashes, respects limit
-- approve(): increments count, auto-approves at threshold, idempotent for same reviewer
-- reject(): updates status to REJECTED, removes from queue
+- enqueue(): atomic Lua script + Sorted Set NX, capacity, dedup
+- list_pending(): ZRANGE desc, limit, bytes decode
+- approve(): threshold, idempotency, lock failure
+- reject(): lock guard, APPROVED→REJECTED raises ValidationError
 """
 import pytest
 from datetime import datetime, timezone
@@ -16,24 +16,19 @@ from app.cache.schemas import CacheEntry, CacheStatus
 from app.cache.store import RagCacheStore
 from app.clients.redis import RedisClient
 from app.core.config import Settings
+from app.core.exceptions import ValidationError
 from app.models.chunk import ChunkSchema
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def _make_redis() -> tuple[RedisClient, MagicMock]:
     client = RedisClient()
     inner = MagicMock()
-    inner.llen = AsyncMock(return_value=0)
-    inner.lrange = AsyncMock(return_value=[])
-    inner.lpush = AsyncMock(return_value=1)
-    inner.lrem = AsyncMock(return_value=1)
+    inner.eval = AsyncMock(return_value=1)    # enqueue Lua (1=added) + lock release
+    inner.zrange = AsyncMock(return_value=[])
+    inner.zrem = AsyncMock(return_value=1)
     inner.get = AsyncMock(return_value=None)
     inner.setex = AsyncMock(return_value=True)
-    inner.set = AsyncMock(return_value=True)   # acquire_lock
-    inner.eval = AsyncMock(return_value=1)     # release_lock Lua script
+    inner.set = AsyncMock(return_value=True)  # acquire_lock
     inner.ttl = AsyncMock(return_value=3600)
     client._client = inner
     return client, inner
@@ -73,79 +68,71 @@ def _make_queue(redis, inner, **cfg_overrides) -> tuple[ReviewQueue, RagCacheSto
 
 
 # ---------------------------------------------------------------------------
-# enqueue()
+# enqueue() — atomic Lua + Sorted Set
 # ---------------------------------------------------------------------------
 
 class TestReviewQueueEnqueue:
-    async def test_pushes_hash_to_pending_list(self):
+    async def test_calls_eval_to_add_hash(self):
         redis, inner = _make_redis()
-        inner.llen = AsyncMock(return_value=0)
-        inner.lrange = AsyncMock(return_value=[])
         queue, _ = _make_queue(redis, inner)
         await queue.enqueue("abc123")
-        inner.lpush.assert_awaited_once()
-        assert inner.lpush.call_args.args[1] == "abc123"
+        inner.eval.assert_awaited_once()
 
-    async def test_does_not_push_when_queue_at_capacity(self):
+    async def test_eval_receives_hash_as_member(self):
         redis, inner = _make_redis()
-        inner.llen = AsyncMock(return_value=100)
+        queue, _ = _make_queue(redis, inner)
+        await queue.enqueue("abc123")
+        assert "abc123" in inner.eval.call_args.args
+
+    async def test_handles_capacity_full_gracefully(self):
+        redis, inner = _make_redis()
+        inner.eval = AsyncMock(return_value=-1)  # at capacity
         queue, _ = _make_queue(redis, inner, cache_max_pending_reviews=100)
-        await queue.enqueue("abc123")
-        inner.lpush.assert_not_awaited()
+        await queue.enqueue("abc123")  # must not raise
 
-    async def test_does_not_duplicate_existing_hash(self):
+    async def test_handles_already_present_gracefully(self):
         redis, inner = _make_redis()
-        inner.llen = AsyncMock(return_value=1)
-        inner.lrange = AsyncMock(return_value=["abc123"])
+        inner.eval = AsyncMock(return_value=0)  # ZADD NX no-op
         queue, _ = _make_queue(redis, inner)
-        await queue.enqueue("abc123")
-        inner.lpush.assert_not_awaited()
-
-    async def test_pushes_when_hash_is_new(self):
-        redis, inner = _make_redis()
-        inner.llen = AsyncMock(return_value=1)
-        inner.lrange = AsyncMock(return_value=["other_hash"])
-        queue, _ = _make_queue(redis, inner)
-        await queue.enqueue("new_hash")
-        inner.lpush.assert_awaited_once()
+        await queue.enqueue("abc123")  # must not raise
 
     async def test_pending_key_uses_review_namespace(self):
         redis, inner = _make_redis()
-        inner.llen = AsyncMock(return_value=0)
-        inner.lrange = AsyncMock(return_value=[])
         queue, _ = _make_queue(redis, inner)
         await queue.enqueue("h1")
-        key = inner.lpush.call_args.args[0]
+        key = inner.eval.call_args.args[2]   # KEYS[1]
         assert "review" in key
         assert "pending" in key
 
 
 # ---------------------------------------------------------------------------
-# list_pending()
+# list_pending() — ZRANGE desc=True
 # ---------------------------------------------------------------------------
 
 class TestReviewQueueListPending:
     async def test_returns_list_of_hashes(self):
         redis, inner = _make_redis()
-        inner.lrange = AsyncMock(return_value=["hash1", "hash2"])
+        inner.zrange = AsyncMock(return_value=["hash1", "hash2"])
         queue, _ = _make_queue(redis, inner)
-        result = await queue.list_pending(limit=10)
-        assert result == ["hash1", "hash2"]
+        assert await queue.list_pending(limit=10) == ["hash1", "hash2"]
 
     async def test_respects_limit_parameter(self):
         redis, inner = _make_redis()
         queue, _ = _make_queue(redis, inner)
         await queue.list_pending(limit=5)
-        inner.lrange.assert_awaited_once_with(
-            redis.cache_key("review", "pending"), 0, 4
-        )
+        inner.zrange.assert_awaited_once()
+        assert inner.zrange.call_args.args[2] == 4  # end = limit - 1
 
     async def test_returns_empty_list_when_no_pending(self):
         redis, inner = _make_redis()
-        inner.lrange = AsyncMock(return_value=[])
         queue, _ = _make_queue(redis, inner)
-        result = await queue.list_pending()
-        assert result == []
+        assert await queue.list_pending() == []
+
+    async def test_decodes_bytes_members(self):
+        redis, inner = _make_redis()
+        inner.zrange = AsyncMock(return_value=[b"hash1", b"hash2"])
+        queue, _ = _make_queue(redis, inner)
+        assert await queue.list_pending() == ["hash1", "hash2"]
 
 
 # ---------------------------------------------------------------------------
@@ -155,100 +142,92 @@ class TestReviewQueueListPending:
 class TestReviewQueueApprove:
     async def test_returns_approved_when_threshold_reached(self):
         redis, inner = _make_redis()
-        entry = _make_entry(approval_count=0)
-        inner.get = AsyncMock(return_value=entry.model_dump_json())
+        inner.get = AsyncMock(return_value=_make_entry(approval_count=0).model_dump_json())
         queue, _ = _make_queue(redis, inner, cache_auto_approve_threshold=1)
-        status = await queue.approve("deadbeefcafe0000", "reviewer-1")
-        assert status == CacheStatus.APPROVED
+        assert await queue.approve("deadbeefcafe0000", "r1") == CacheStatus.APPROVED
 
     async def test_returns_pending_when_threshold_not_reached(self):
         redis, inner = _make_redis()
-        entry = _make_entry(approval_count=0)
-        inner.get = AsyncMock(return_value=entry.model_dump_json())
+        inner.get = AsyncMock(return_value=_make_entry(approval_count=0).model_dump_json())
         queue, _ = _make_queue(redis, inner, cache_auto_approve_threshold=3)
-        status = await queue.approve("deadbeefcafe0000", "reviewer-1")
-        assert status == CacheStatus.PENDING_REVIEW
+        assert await queue.approve("deadbeefcafe0000", "r1") == CacheStatus.PENDING_REVIEW
 
     async def test_second_approval_reaches_threshold_of_two(self):
         redis, inner = _make_redis()
-        entry = _make_entry(approval_count=1, approved_by=["reviewer-1"])
+        entry = _make_entry(approval_count=1, approved_by=["r1"])
         inner.get = AsyncMock(return_value=entry.model_dump_json())
         queue, _ = _make_queue(redis, inner, cache_auto_approve_threshold=2)
-        status = await queue.approve("deadbeefcafe0000", "reviewer-2")
-        assert status == CacheStatus.APPROVED
+        assert await queue.approve("deadbeefcafe0000", "r2") == CacheStatus.APPROVED
 
     async def test_idempotent_for_same_reviewer(self):
         redis, inner = _make_redis()
-        entry = _make_entry(approval_count=1, approved_by=["reviewer-1"])
+        entry = _make_entry(approval_count=1, approved_by=["r1"])
         inner.get = AsyncMock(return_value=entry.model_dump_json())
         queue, _ = _make_queue(redis, inner, cache_auto_approve_threshold=3)
-        status = await queue.approve("deadbeefcafe0000", "reviewer-1")
+        status = await queue.approve("deadbeefcafe0000", "r1")
         assert status == entry.status
         inner.setex.assert_not_awaited()
 
     async def test_returns_pending_when_entry_not_found(self):
         redis, inner = _make_redis()
-        inner.get = AsyncMock(return_value=None)
         queue, _ = _make_queue(redis, inner)
-        status = await queue.approve("nonexistent", "reviewer-1")
-        assert status == CacheStatus.PENDING_REVIEW
+        assert await queue.approve("nonexistent", "r1") == CacheStatus.PENDING_REVIEW
         inner.setex.assert_not_awaited()
 
-    async def test_removes_from_queue_when_approved(self):
+    async def test_removes_from_queue_via_zrem_when_approved(self):
         redis, inner = _make_redis()
-        entry = _make_entry(approval_count=0)
-        inner.get = AsyncMock(return_value=entry.model_dump_json())
+        inner.get = AsyncMock(return_value=_make_entry(approval_count=0).model_dump_json())
         queue, _ = _make_queue(redis, inner, cache_auto_approve_threshold=1)
-        await queue.approve("deadbeefcafe0000", "reviewer-1")
-        inner.lrem.assert_awaited_once()
+        await queue.approve("deadbeefcafe0000", "r1")
+        inner.zrem.assert_awaited_once()
 
-    async def test_stores_updated_entry_on_approval(self):
+    async def test_stores_updated_approval_count_and_reviewer(self):
         redis, inner = _make_redis()
-        entry = _make_entry(approval_count=0)
-        inner.get = AsyncMock(return_value=entry.model_dump_json())
+        inner.get = AsyncMock(return_value=_make_entry(approval_count=0).model_dump_json())
         queue, _ = _make_queue(redis, inner, cache_auto_approve_threshold=1)
-        await queue.approve("deadbeefcafe0000", "reviewer-1")
+        await queue.approve("deadbeefcafe0000", "r1")
         inner.setex.assert_awaited_once()
-        raw = inner.setex.call_args.args[2]
-        updated = CacheEntry.model_validate_json(raw)
+        updated = CacheEntry.model_validate_json(inner.setex.call_args.args[2])
         assert updated.approval_count == 1
-        assert "reviewer-1" in updated.approved_by
+        assert "r1" in updated.approved_by
 
     async def test_returns_pending_when_lock_not_acquired(self):
         redis, inner = _make_redis()
-        inner.set = AsyncMock(return_value=None)  # lock fails
+        inner.set = AsyncMock(return_value=None)  # lock acquire fails
         queue, _ = _make_queue(redis, inner)
-        status = await queue.approve("deadbeefcafe0000", "reviewer-1")
-        assert status == CacheStatus.PENDING_REVIEW
+        assert await queue.approve("deadbeefcafe0000", "r1") == CacheStatus.PENDING_REVIEW
         inner.setex.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
-# reject() idempotency / status-guard
+# reject() guards
 # ---------------------------------------------------------------------------
 
 class TestReviewQueueRejectGuards:
-    async def test_reject_is_noop_when_already_rejected(self):
+    async def test_noop_when_already_rejected(self):
         redis, inner = _make_redis()
-        entry = _make_entry(status=CacheStatus.REJECTED)
-        inner.get = AsyncMock(return_value=entry.model_dump_json())
+        inner.get = AsyncMock(
+            return_value=_make_entry(status=CacheStatus.REJECTED).model_dump_json()
+        )
         queue, _ = _make_queue(redis, inner)
         await queue.reject("deadbeefcafe0000")
         inner.setex.assert_not_awaited()
 
-    async def test_reject_is_noop_when_entry_missing(self):
+    async def test_noop_when_entry_missing(self):
         redis, inner = _make_redis()
-        inner.get = AsyncMock(return_value=None)
         queue, _ = _make_queue(redis, inner)
         await queue.reject("deadbeefcafe0000")
         inner.setex.assert_not_awaited()
 
-    async def test_reject_does_not_overwrite_approved_entry(self):
+    async def test_raises_validation_error_for_approved_entry(self):
+        """APPROVED is terminal — APPROVED → REJECTED must raise ValidationError."""
         redis, inner = _make_redis()
-        entry = _make_entry(status=CacheStatus.APPROVED)
-        inner.get = AsyncMock(return_value=entry.model_dump_json())
+        inner.get = AsyncMock(
+            return_value=_make_entry(status=CacheStatus.APPROVED).model_dump_json()
+        )
         queue, _ = _make_queue(redis, inner)
-        await queue.reject("deadbeefcafe0000")
+        with pytest.raises(ValidationError):
+            await queue.reject("deadbeefcafe0000")
         inner.setex.assert_not_awaited()
 
 
@@ -261,27 +240,22 @@ class TestReviewQueueReject:
         redis, inner = _make_redis()
         entry = _make_entry()
         inner.get = AsyncMock(return_value=entry.model_dump_json())
-        inner.ttl = AsyncMock(return_value=3600)
         queue, _ = _make_queue(redis, inner)
         await queue.reject("deadbeefcafe0000")
-        raw = inner.setex.call_args.args[2]
-        updated = CacheEntry.model_validate_json(raw)
+        updated = CacheEntry.model_validate_json(inner.setex.call_args.args[2])
         assert updated.status == CacheStatus.REJECTED
 
-    async def test_removes_from_pending_queue(self):
+    async def test_removes_from_pending_queue_via_zrem(self):
         redis, inner = _make_redis()
-        entry = _make_entry()
-        inner.get = AsyncMock(return_value=entry.model_dump_json())
+        inner.get = AsyncMock(return_value=_make_entry().model_dump_json())
         queue, _ = _make_queue(redis, inner)
         await queue.reject("deadbeefcafe0000")
-        inner.lrem.assert_awaited_once()
+        inner.zrem.assert_awaited_once()
 
-    async def test_lrem_targets_pending_key(self):
+    async def test_zrem_targets_pending_key(self):
         redis, inner = _make_redis()
-        entry = _make_entry()
-        inner.get = AsyncMock(return_value=entry.model_dump_json())
+        inner.get = AsyncMock(return_value=_make_entry().model_dump_json())
         queue, _ = _make_queue(redis, inner)
         await queue.reject("deadbeefcafe0000")
-        lrem_key = inner.lrem.call_args.args[0]
-        assert "review" in lrem_key
-        assert "pending" in lrem_key
+        key = inner.zrem.call_args.args[0]
+        assert "review" in key and "pending" in key

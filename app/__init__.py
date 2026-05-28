@@ -3,6 +3,7 @@ import logging
 
 from fastapi import FastAPI
 
+from app.cache.service import RagCacheService
 from app.clients.llm import OpenAILLMClient
 from app.clients.milvus import MilvusClient
 from app.clients.mq import RedisStreamsMQClient
@@ -48,6 +49,9 @@ async def _lifespan(app: FastAPI):
             except Exception as exc:
                 logger.warning("Error during startup-failure cleanup: %s", exc)
         raise
+
+    # Build singleton services after all clients are connected.
+    app.state.cache_svc = RagCacheService(redis=app.state.redis, llm=app.state.llm)
 
     yield
 

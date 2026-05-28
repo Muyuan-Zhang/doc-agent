@@ -62,6 +62,7 @@ class Settings(BaseSettings):
     cache_auto_approve_threshold: int = 3
     cache_rewrite_enabled: bool = True
     cache_max_pending_reviews: int = 100
+    cache_api_key: str = ""  # required for approve/reject/delete; empty disables auth
 
     # Redis Streams MQ
     mq_stream_name: str = "doc-agent:tasks"

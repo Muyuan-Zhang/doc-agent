@@ -31,12 +31,15 @@ class QueryRewriter:
         return hashlib.sha256(normalized.encode()).hexdigest()[:16]
 
     async def rewrite(self, query: str) -> tuple[str, str]:
-        """Return (normalized_query, query_hash).
+        """Return (display_normalized_query, query_hash).
 
-        Uses LLM to canonicalise the query when cache_rewrite_enabled=True.
-        Falls back to plain normalize() if LLM is unavailable or disabled.
+        Hash is computed from the pre-rewrite normalized form so the same raw
+        input always maps to the same cache key regardless of LLM non-determinism.
+        LLM rewrite is used only for display / downstream search, not for hashing.
         """
         normalized = self.normalize(query)
+        # Hash the stable pre-rewrite form — must not change after this line
+        query_hash = self.hash_query(normalized)
         if self._cfg.cache_rewrite_enabled:
             try:
                 safe_input = normalized[:_REWRITE_MAX_CHARS]
@@ -51,6 +54,5 @@ class QueryRewriter:
                 if rewritten:
                     normalized = self.normalize(rewritten) or normalized
             except Exception as exc:
-                # Log only the exception type to avoid embedding the prompt in logs
                 logger.warning("cache=rewrite_failed fallback=normalize error=%s", type(exc).__name__)
-        return normalized, self.hash_query(normalized)
+        return normalized, query_hash
