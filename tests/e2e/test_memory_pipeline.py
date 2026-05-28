@@ -5,9 +5,9 @@ The memory router reads only from app.state.*, so direct state injection
 is sufficient to exercise the full middleware → router → service stack.
 """
 import json
-
 import pytest
 from httpx import ASGITransport, AsyncClient
+
 
 from tests.e2e.conftest import make_app, make_llm_mock, make_pg_mock, make_redis_mock, make_milvus_mock
 from app.core.exceptions import NotFoundError
@@ -134,6 +134,7 @@ class TestGetContextEndpoint:
         assert body["turns"] == []
         assert body["summary"] is None
         assert body["static_facts"] == []
+
 
     async def test_returns_turns_from_redis(self):
         app, redis, *_ = _app_with_memory()
