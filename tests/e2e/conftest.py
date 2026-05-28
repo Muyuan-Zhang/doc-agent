@@ -77,13 +77,66 @@ def make_milvus_mock() -> MagicMock:
 def make_app(*, postgres=None, redis=None, milvus=None, mq=None, llm=None):
     """Create the FastAPI app with all client state injected (no lifespan)."""
     from app import create_app
+    from app.cache.service import RagCacheService
     app = create_app()
     app.state.postgres = postgres or make_pg_mock()
-    app.state.redis = redis or make_redis_mock()
+    _redis = redis or make_redis_mock()
+    _llm = llm or make_llm_mock()
+    app.state.redis = _redis
     app.state.milvus = milvus or make_milvus_mock()
     app.state.mq = mq or make_client_mock()
-    app.state.llm = llm or make_llm_mock()
+    app.state.llm = _llm
+    app.state.cache_svc = RagCacheService(redis=_redis, llm=_llm)
     return app
+
+
+def _make_cache_pipeline(entry=None):
+    """Pipeline mock used by get_many() and get_stats()."""
+    pipe = MagicMock()
+    # get_many uses pipe.get(); get_stats uses pipe.hgetall() + pipe.zcard()
+    pipe.get = MagicMock(return_value=pipe)
+    pipe.hgetall = MagicMock(return_value=pipe)
+    pipe.zcard = MagicMock(return_value=pipe)
+    # get_many: returns list of serialised entries (one per hash)
+    # get_stats: returns (stats_dict, pending_count)
+    if entry is not None:
+        pipe.execute = AsyncMock(return_value=[entry.model_dump_json()])
+    else:
+        pipe.execute = AsyncMock(return_value=[{}, 0])
+    return pipe
+
+
+def make_cache_redis_mock(entry=None) -> MagicMock:
+    """Redis mock for M3 cache tests (Sorted Set ops).
+
+    Uses a real cache_key side_effect so key routing is correct.
+    Accepts an optional CacheEntry to pre-populate get/zrange stubs.
+    """
+    from app.core.config import settings
+
+    m = make_client_mock()
+    m.cache_key = MagicMock(
+        side_effect=lambda ns, *parts: f"{settings.knowledge_base_version}:{ns}:{':'.join(str(p) for p in parts)}"
+    )
+    inner = MagicMock()
+    inner.get = AsyncMock(return_value=entry.model_dump_json() if entry else None)
+    inner.setex = AsyncMock(return_value=True)
+    inner.delete = AsyncMock(return_value=1)
+    # Sorted Set ops replace List ops
+    inner.zrange = AsyncMock(
+        return_value=[] if entry is None else [entry.query_hash]
+    )
+    inner.zrem = AsyncMock(return_value=1)
+    inner.eval = AsyncMock(return_value=1)   # enqueue Lua + lock release
+    inner.ttl = AsyncMock(return_value=3600)
+    inner.hincrby = AsyncMock(return_value=1)
+    inner.scan = AsyncMock(return_value=(0, []))
+    inner.set = AsyncMock(return_value=True)  # acquire_lock
+    inner.pipeline = MagicMock(return_value=_make_cache_pipeline(entry))
+    m.client = inner
+    m.acquire_lock = AsyncMock(return_value=(True, "mock-token"))
+    m.release_lock = AsyncMock(return_value=True)
+    return m
 
 
 @pytest.fixture
