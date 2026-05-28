@@ -134,6 +134,9 @@ class TestM6ConsistencySettings:
     def test_cache_invalidation_scan_batch_default(self):
         assert Settings().cache_invalidation_scan_batch == 100
 
+    def test_cache_invalidation_max_iterations_default(self):
+        assert Settings().cache_invalidation_max_iterations == 1000
+
     def test_consistency_consumer_group_overridden_by_env(self):
         with patch.dict(os.environ, {"CONSISTENCY_CONSUMER_GROUP": "my-consistency-group"}):
             assert Settings().consistency_consumer_group == "my-consistency-group"

@@ -1,5 +1,5 @@
 """Unit tests for CacheInvalidator."""
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -55,6 +55,32 @@ class TestCacheInvalidatorWithKeys:
         inv = CacheInvalidator(redis, namespace="summary")
         await inv.invalidate("v1")
         assert redis.client.scan.call_args.kwargs["match"] == "v1:summary:*"
+
+
+class TestCacheInvalidatorMaxIterations:
+    async def test_stops_at_max_iterations(self):
+        redis = MagicMock()
+        redis.client = AsyncMock()
+        redis.client.scan = AsyncMock(return_value=(5, ["v1:rag:k"]))
+        redis.client.unlink = AsyncMock()
+        inv = CacheInvalidator(redis, namespace="rag", max_iterations=3)
+        result = await inv.invalidate("v1")
+        assert redis.client.scan.await_count == 3
+        assert result == 3
+
+    async def test_yields_event_loop_between_batches(self):
+        redis = _make_redis([(5, ["v1:rag:k1"]), (0, ["v1:rag:k2"])])
+        inv = CacheInvalidator(redis, namespace="rag")
+        with patch("app.consistency.invalidator.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            await inv.invalidate("v1")
+        mock_sleep.assert_awaited_once_with(0)
+
+    async def test_no_yield_on_single_batch(self):
+        redis = _make_redis([(0, ["v1:rag:k1"])])
+        inv = CacheInvalidator(redis, namespace="rag")
+        with patch("app.consistency.invalidator.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            await inv.invalidate("v1")
+        mock_sleep.assert_not_awaited()
 
 
 class TestCacheInvalidatorPagination:

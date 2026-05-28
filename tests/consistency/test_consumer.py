@@ -98,6 +98,43 @@ class TestConsistencyConsumerKbDeleted:
         mq.ack.assert_awaited_once_with("789-0")
 
 
+class TestConsistencyConsumerInvalidVersion:
+    async def test_rejects_wildcard_version(self):
+        msg = MQMessage(id="1-0", data={"event": "kb_updated", "doc_id": "d1", "version": "*"}, stream="s")
+        mq = _make_mq(msg)
+        inv = _make_invalidator()
+        consumer = ConsistencyConsumer(mq, inv, "v1")
+        result = await consumer.run_once()
+        assert result == 0
+        inv.invalidate.assert_not_awaited()
+
+    async def test_rejects_version_with_special_chars(self):
+        msg = MQMessage(id="1-0", data={"event": "kb_updated", "version": "v1:rag:extra"}, stream="s")
+        mq = _make_mq(msg)
+        inv = _make_invalidator()
+        consumer = ConsistencyConsumer(mq, inv, "v1")
+        result = await consumer.run_once()
+        assert result == 0
+        inv.invalidate.assert_not_awaited()
+
+    async def test_still_acks_message_with_invalid_version(self):
+        msg = MQMessage(id="9-0", data={"event": "kb_updated", "version": "bad*version"}, stream="s")
+        mq = _make_mq(msg)
+        inv = _make_invalidator()
+        consumer = ConsistencyConsumer(mq, inv, "v1")
+        await consumer.run_once()
+        mq.ack.assert_awaited_once_with("9-0")
+
+    async def test_valid_version_with_dash_and_underscore_accepted(self):
+        msg = MQMessage(id="1-0", data={"event": "kb_updated", "doc_id": "d1", "version": "v1_2-3"}, stream="s")
+        mq = _make_mq(msg)
+        inv = _make_invalidator()
+        consumer = ConsistencyConsumer(mq, inv, "v1")
+        result = await consumer.run_once()
+        assert result == 1
+        inv.invalidate.assert_awaited_once_with("v1_2-3")
+
+
 class TestConsistencyConsumerUnknownEvent:
     async def test_ignores_unknown_event_type(self):
         mq = _make_mq(_msg("some_other_event"))

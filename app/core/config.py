@@ -71,6 +71,7 @@ class Settings(BaseSettings):
     )
     cache_rag_namespace: str = "rag"
     cache_invalidation_scan_batch: int = 100
+    cache_invalidation_max_iterations: int = 1000
 
 
 settings = Settings()

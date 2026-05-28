@@ -168,3 +168,4 @@ class TestDeleteDocument:
         payload = svc._mq.publish.call_args[0][0]
         assert payload["event"] == "kb_deleted"
         assert payload["doc_id"] == "d1"
+        assert "version" in payload
