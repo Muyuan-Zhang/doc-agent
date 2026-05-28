@@ -40,7 +40,6 @@ def _state(**overrides) -> dict:
         reranked_chunks=[],
         answer="",
         error=None,
-        retry_count=0,
     )
     return {**base, **overrides}
 

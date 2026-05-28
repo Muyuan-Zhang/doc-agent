@@ -88,8 +88,7 @@ async def stream_answer(job_id: UUID, request: Request) -> StreamingResponse:
             status = data.get("status", "")
             if status == "done":
                 answer = data.get("answer", "")
-                for word in answer.split():
-                    yield f"data: {word}\n\n"
+                yield f"data: {answer}\n\n"
                 yield "data: [DONE]\n\n"
                 return
             if status == "error":

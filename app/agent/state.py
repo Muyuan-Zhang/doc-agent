@@ -15,4 +15,3 @@ class AgentState(TypedDict):
     reranked_chunks: list[ChunkSchema]
     answer: str
     error: Optional[str]
-    retry_count: int

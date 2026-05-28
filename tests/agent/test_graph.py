@@ -54,7 +54,6 @@ class TestBuildGraph:
             "reranked_chunks": [],
             "answer": "",
             "error": None,
-            "retry_count": 0,
         })
 
         assert result["answer"] == "A great answer."

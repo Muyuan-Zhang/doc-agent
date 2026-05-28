@@ -57,7 +57,7 @@ class TestProcessMessage:
         assert invoked_state["query"] == "what is redis?"
         assert invoked_state["session_id"] == "sess-x"
         assert invoked_state["top_k"] == 5
-        assert invoked_state["retry_count"] == 0
+
 
     async def test_acks_message_on_success(self):
         msg = _make_msg()
@@ -125,7 +125,7 @@ class TestProcessMessage:
             for c in redis.client.hset.await_args_list
         ]
         error_mapping = next(m for m in all_mappings if m.get("status") == "error")
-        assert "specific error text" in error_mapping.get("error", "")
+        assert "ValueError" in error_mapping.get("error", "")
 
 
 # ---------------------------------------------------------------------------

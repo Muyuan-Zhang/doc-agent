@@ -8,6 +8,7 @@ import asyncio
 import logging
 
 from app.agent._keys import job_key
+from app.agent.state import AgentState
 from app.clients.mq import MQMessage
 from app.core.config import settings
 
@@ -27,7 +28,7 @@ async def _process_message(msg: MQMessage, graph, redis, mq) -> None:
     job_id = msg.data.get("job_id", "unknown")
     try:
         await _set_job_status(redis, job_id, "running")
-        state = {
+        state: AgentState = {
             "session_id": msg.data.get("session_id", ""),
             "job_id": job_id,
             "query": msg.data.get("query", ""),
@@ -37,7 +38,6 @@ async def _process_message(msg: MQMessage, graph, redis, mq) -> None:
             "reranked_chunks": [],
             "answer": "",
             "error": None,
-            "retry_count": 0,
         }
         result = await graph.ainvoke(state)
         await _set_job_status(redis, job_id, "done", answer=result.get("answer", ""), error="")
@@ -45,7 +45,9 @@ async def _process_message(msg: MQMessage, graph, redis, mq) -> None:
         raise
     except Exception as exc:
         logger.error("Job %s failed: %s", job_id, exc)
-        await _set_job_status(redis, job_id, "error", answer="", error=str(exc))
+        logger.debug("Job %s exception detail:", job_id, exc_info=True)
+        error_msg = f"{type(exc).__name__}: job processing failed"
+        await _set_job_status(redis, job_id, "error", answer="", error=error_msg)
     finally:
         await mq.ack(msg.id)
 
