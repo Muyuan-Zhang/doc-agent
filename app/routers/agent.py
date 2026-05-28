@@ -1,11 +1,94 @@
-from fastapi import APIRouter
+"""M4 Agent API endpoints.
+
+POST /agent/query   — enqueue a query job; returns job_id immediately (async)
+GET  /agent/jobs/{job_id}   — poll job status / answer
+GET  /agent/stream/{job_id} — stream the answer as SSE once the job completes
+"""
+import asyncio
+import logging
+from typing import AsyncIterator
+from uuid import uuid4
+
+from fastapi import APIRouter, Request
+from fastapi.responses import StreamingResponse
+
+from app.agent.schemas import JobStatus, QueryRequest, QueryResponse
+from app.core.config import settings
+from app.core.exceptions import NotFoundError
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
-# LangGraph 节点注册顺序（M4 实现）:
-# 1. query_rewrite      — 查询重写
-# 2. retrieval          — 混合检索（调用 HybridRetriever）
-# 3. entity_extraction  — pass-through（Graph RAG 预留）
-# 4. rerank             — LLM 重排序
-# 5. generate           — 流式输出
-# 6. cache_write        — 写入 RAG 缓存
+
+def _job_key(job_id: str) -> str:
+    return f"{{agent:job:{job_id}}}"
+
+
+async def _init_job(redis, job_id: str) -> None:
+    key = _job_key(job_id)
+    await redis.client.hset(key, mapping={"status": "queued", "answer": "", "error": ""})
+    await redis.client.expire(key, settings.agent_job_ttl_seconds)
+
+
+async def _load_job(redis, job_id: str) -> JobStatus | None:
+    data = await redis.client.hgetall(_job_key(job_id))
+    if not data:
+        return None
+    return JobStatus(
+        job_id=job_id,
+        status=data.get("status", "error"),
+        answer=data.get("answer") or None,
+        error=data.get("error") or None,
+    )
+
+
+@router.post("/query", status_code=202, response_model=QueryResponse)
+async def enqueue_query(body: QueryRequest, request: Request) -> QueryResponse:
+    job_id = str(uuid4())
+    await request.app.state.mq.publish({
+        "job_id": job_id,
+        "session_id": body.session_id,
+        "query": body.query,
+        "top_k": str(body.top_k),
+    })
+    await _init_job(request.app.state.redis, job_id)
+    return QueryResponse(job_id=job_id, status="queued")
+
+
+@router.get("/jobs/{job_id}", response_model=JobStatus)
+async def get_job(job_id: str, request: Request) -> JobStatus:
+    status = await _load_job(request.app.state.redis, job_id)
+    if status is None:
+        raise NotFoundError(f"Job {job_id!r} not found")
+    return status
+
+
+@router.get("/stream/{job_id}")
+async def stream_answer(job_id: str, request: Request) -> StreamingResponse:
+    redis = request.app.state.redis
+
+    job = await _load_job(redis, job_id)
+    if job is None:
+        raise NotFoundError(f"Job {job_id!r} not found")
+
+    async def _sse_gen() -> AsyncIterator[str]:
+        deadline = asyncio.get_event_loop().time() + 60.0
+        while asyncio.get_event_loop().time() < deadline:
+            data = await redis.client.hgetall(_job_key(job_id))
+            status = data.get("status", "")
+            if status == "done":
+                answer = data.get("answer", "")
+                for word in answer.split():
+                    yield f"data: {word}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+            if status == "error":
+                err = data.get("error", "unknown error")
+                yield f"data: [ERROR] {err}\n\n"
+                return
+            yield ": heartbeat\n\n"
+            await asyncio.sleep(settings.stream_heartbeat_interval)
+        yield "data: [TIMEOUT]\n\n"
+
+    return StreamingResponse(_sse_gen(), media_type="text/event-stream")

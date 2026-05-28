@@ -19,7 +19,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "pypdf>=4.0",
     "openai>=1.0",
-    "langgraph>=0.2,<0.5",
+    "langgraph>=0.2",
 ]
 
 [project.optional-dependencies]
