@@ -77,5 +77,11 @@ class Settings(BaseSettings):
         default_factory=lambda: f"{socket.gethostname()}-{os.getpid()}"
     )
 
+    # M4 Agent
+    agent_max_retries: int = 3
+    agent_job_ttl_seconds: int = 3600
+    stream_heartbeat_interval: float = 15.0
+    agent_rate_limit_rpm: int = 20
+
 
 settings = Settings()

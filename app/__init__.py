@@ -1,8 +1,11 @@
+import asyncio
 import contextlib
 import logging
 
 from fastapi import FastAPI
 
+from app.agent.consumer import run_consumer
+from app.agent.graph import build_graph
 from app.cache.service import RagCacheService
 from app.clients.llm import OpenAILLMClient
 from app.clients.milvus import MilvusClient
@@ -55,6 +58,15 @@ async def _lifespan(app: FastAPI):
                 logger.warning("Error during startup-failure cleanup: %s", exc)
         raise
 
+    graph = build_graph(
+        llm=app.state.llm,
+        retriever=None,
+        redis=app.state.redis,
+    )
+    consumer_task = asyncio.create_task(
+        run_consumer(app.state.mq, graph, app.state.redis)
+    )
+    app.state.consumer_task = consumer_task
     bm25 = BM25Strategy(pg=app.state.postgres)
     vector = VectorStrategy(milvus=app.state.milvus, llm=app.state.llm)
     reranker = LLMReranker(llm=app.state.llm)
@@ -63,6 +75,10 @@ async def _lifespan(app: FastAPI):
     app.state.cache_svc = RagCacheService(redis=app.state.redis, llm=app.state.llm)
 
     yield
+
+    consumer_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await consumer_task
 
     for client in reversed(connected):
         try:
