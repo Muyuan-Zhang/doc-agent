@@ -202,7 +202,8 @@ class TestStreamAnswer:
             resp = await c.get(f"/agent/stream/{_VALID_JOB_UUID}")
 
         assert "event: error" in resp.text
-        assert "LLM timeout" in resp.text
+        assert "job_failed" in resp.text
+        assert "LLM timeout" not in resp.text  # raw error must not reach client
 
     async def test_returns_404_for_unknown_job_in_stream(self):
         redis = make_redis_mock()

@@ -102,7 +102,9 @@ async def stream_answer(job_id: UUID, request: Request) -> EventSourceResponse:
                 if status == "done":
                     yield {"event": "done", "data": ""}
                 else:
-                    yield {"event": "error", "data": data.get("error", "unknown error")}
+                    raw_err = data.get("error", "")
+                    logger.error("Job %s failed: %s", job_id_str, raw_err)
+                    yield {"event": "error", "data": "job_failed"}
                 return
 
             await asyncio.sleep(_STREAM_POLL_INTERVAL)
