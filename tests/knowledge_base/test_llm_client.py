@@ -190,3 +190,96 @@ class TestOpenAILLMClientComplete:
         mock_openai.chat.completions.create = AsyncMock(return_value=mock_resp)
         result = await client.complete("prompt")
         assert result == ""
+
+
+class TestStreamComplete:
+    def _make_chunk(self, content):
+        chunk = MagicMock()
+        chunk.choices = [MagicMock()]
+        chunk.choices[0].delta.content = content
+        return chunk
+
+    def _make_stream_mock(self, contents):
+        chunks = [self._make_chunk(c) for c in contents]
+
+        async def _stream():
+            for chunk in chunks:
+                yield chunk
+
+        return _stream()
+
+    async def test_yields_tokens_from_stream(self):
+        client, mock_openai = _connected_client()
+        mock_openai.chat = MagicMock()
+        mock_openai.chat.completions = MagicMock()
+        mock_openai.chat.completions.create = AsyncMock(
+            return_value=self._make_stream_mock(["Hello", " world"])
+        )
+
+        tokens = []
+        async for token in client.stream_complete("test prompt"):
+            tokens.append(token)
+
+        assert tokens == ["Hello", " world"]
+
+    async def test_skips_none_and_empty_delta_content(self):
+        client, mock_openai = _connected_client()
+        mock_openai.chat = MagicMock()
+        mock_openai.chat.completions = MagicMock()
+        mock_openai.chat.completions.create = AsyncMock(
+            return_value=self._make_stream_mock(["token", None, "", "end"])
+        )
+
+        tokens = []
+        async for token in client.stream_complete("prompt"):
+            tokens.append(token)
+
+        assert tokens == ["token", "end"]
+
+    async def test_passes_stream_true_to_api(self):
+        client, mock_openai = _connected_client()
+        mock_openai.chat = MagicMock()
+        mock_openai.chat.completions = MagicMock()
+
+        async def _empty():
+            return
+            yield  # noqa: unreachable — makes it an async generator
+
+        mock_openai.chat.completions.create = AsyncMock(return_value=_empty())
+
+        async for _ in client.stream_complete("prompt"):
+            pass
+
+        _, kwargs = mock_openai.chat.completions.create.call_args
+        assert kwargs.get("stream") is True
+
+    async def test_passes_max_tokens_kwarg(self):
+        client, mock_openai = _connected_client()
+        mock_openai.chat = MagicMock()
+        mock_openai.chat.completions = MagicMock()
+
+        async def _empty():
+            return
+            yield  # noqa: unreachable
+
+        mock_openai.chat.completions.create = AsyncMock(return_value=_empty())
+
+        async for _ in client.stream_complete("prompt", max_tokens=256):
+            pass
+
+        _, kwargs = mock_openai.chat.completions.create.call_args
+        assert kwargs.get("max_tokens") == 256
+
+    async def test_yields_nothing_on_empty_stream(self):
+        client, mock_openai = _connected_client()
+        mock_openai.chat = MagicMock()
+        mock_openai.chat.completions = MagicMock()
+        mock_openai.chat.completions.create = AsyncMock(
+            return_value=self._make_stream_mock([])
+        )
+
+        tokens = []
+        async for token in client.stream_complete("prompt"):
+            tokens.append(token)
+
+        assert tokens == []

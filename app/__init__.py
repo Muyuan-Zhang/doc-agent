@@ -1,8 +1,11 @@
 import asyncio
 import contextlib
 import logging
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.agent.consumer import run_consumer
 from app.agent.graph import build_graph
@@ -115,4 +118,14 @@ def create_app() -> FastAPI:
     app.include_router(retrieval_router)
     app.include_router(memory_router)
     app.include_router(cache_router)
+
+    # Static file serving — registered after API routers so it never shadows them
+    _static = Path(__file__).parent / "static"
+
+    @app.get("/", include_in_schema=False)
+    async def _spa_root():
+        return FileResponse(str(_static / "index.html"))
+
+    app.mount("/static", StaticFiles(directory=str(_static)), name="static")
+
     return app

@@ -2,17 +2,16 @@
 
 POST /agent/query           — enqueue a query job; returns job_id immediately (async)
 GET  /agent/jobs/{job_id}   — poll job status / answer
-GET  /agent/stream/{job_id} — stream the answer as SSE once the job completes
+GET  /agent/stream/{job_id} — stream the answer as SSE events (named: token/done/error/timeout)
 """
 import asyncio
 import logging
-from typing import AsyncIterator
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Request
-from fastapi.responses import StreamingResponse
+from sse_starlette.sse import EventSourceResponse
 
-from app.agent._keys import job_key
+from app.agent._keys import job_key, token_stream_key
 from app.agent.schemas import JobStatus, QueryRequest, QueryResponse
 from app.core.config import settings
 from app.core.exceptions import NotFoundError
@@ -65,11 +64,13 @@ async def get_job(job_id: str, request: Request) -> JobStatus:
 
 
 @router.get("/stream/{job_id}")
-async def stream_answer(job_id: UUID, request: Request) -> StreamingResponse:
-    """Stream job answer as SSE events.
+async def stream_answer(job_id: UUID, request: Request) -> EventSourceResponse:
+    """Stream job answer as SSE named events.
 
-    Polls Redis at a 0.5 s interval; emits SSE keepalive comments at
-    settings.stream_heartbeat_interval cadence to satisfy proxy timeouts.
+    Polls the Redis token List at 0.5 s intervals, forwarding each buffered
+    LLM token as an ``event: token`` message.  Terminates with ``event: done``,
+    ``event: error``, or ``event: timeout``.  Automatic SSE keepalive pings
+    are sent by EventSourceResponse at ``settings.stream_heartbeat_interval``.
     """
     job_id_str = str(job_id)
     redis = request.app.state.redis
@@ -78,28 +79,36 @@ async def stream_answer(job_id: UUID, request: Request) -> StreamingResponse:
     if job is None:
         raise NotFoundError(f"Job {job_id_str!r} not found")
 
-    async def _sse_gen() -> AsyncIterator[str]:
+    stream_key = token_stream_key(job_id_str)
+
+    async def _sse_gen():
         loop = asyncio.get_running_loop()
         deadline = loop.time() + 60.0
-        last_heartbeat = loop.time()
+        sent_idx = 0
 
         while loop.time() < deadline:
+            new_tokens = await redis.client.lrange(stream_key, sent_idx, -1)
+            for token in new_tokens:
+                yield {"event": "token", "data": token}
+            sent_idx += len(new_tokens)
+
             data = await redis.client.hgetall(job_key(job_id_str))
             status = data.get("status", "")
-            if status == "done":
-                answer = data.get("answer", "")
-                yield f"data: {answer}\n\n"
-                yield "data: [DONE]\n\n"
-                return
-            if status == "error":
-                err = data.get("error", "unknown error")
-                yield f"data: [ERROR] {err}\n\n"
-                return
-            now = loop.time()
-            if now - last_heartbeat >= settings.stream_heartbeat_interval:
-                yield ": heartbeat\n\n"
-                last_heartbeat = now
-            await asyncio.sleep(_STREAM_POLL_INTERVAL)
-        yield "data: [TIMEOUT]\n\n"
 
-    return StreamingResponse(_sse_gen(), media_type="text/event-stream")
+            if status in ("done", "error"):
+                remaining = await redis.client.lrange(stream_key, sent_idx, -1)
+                for token in remaining:
+                    yield {"event": "token", "data": token}
+                if status == "done":
+                    yield {"event": "done", "data": ""}
+                else:
+                    raw_err = data.get("error", "")
+                    logger.error("Job %s failed: %s", job_id_str, raw_err)
+                    yield {"event": "error", "data": "job_failed"}
+                return
+
+            await asyncio.sleep(_STREAM_POLL_INTERVAL)
+
+        yield {"event": "timeout", "data": ""}
+
+    return EventSourceResponse(_sse_gen(), ping=int(settings.stream_heartbeat_interval))

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Doc Agent</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>Doc Agent</h1>
+    </header>
+    <div id="layout">
+      <aside id="upload-panel">
+        <h2>Documents</h2>
+        <div id="drop-zone">
+          <p>Drop a PDF or TXT file here</p>
+          <p>or <label for="file-input">browse to upload</label></p>
+          <input type="file" id="file-input" accept=".pdf,.txt" hidden>
+        </div>
+        <ul id="file-list"></ul>
+      </aside>
+      <main id="chat-panel">
+        <ul id="messages"></ul>
+        <div id="input-row">
+          <textarea
+            id="query-input"
+            placeholder="Ask a question… (Enter to send, Shift+Enter for newline)"
+            rows="2"
+          ></textarea>
+          <button id="send-btn">Send</button>
+        </div>
+      </main>
+    </div>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

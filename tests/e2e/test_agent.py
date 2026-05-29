@@ -171,14 +171,39 @@ class TestStreamAnswer:
         assert resp.status_code == 200
         assert "text/event-stream" in resp.headers["content-type"]
 
-    async def test_streams_done_sentinel_at_end(self):
+    async def test_streams_done_event_at_end(self):
         redis = _make_redis_with_job(status="done", answer="hello world")
         app = make_app(redis=redis)
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             resp = await c.get(f"/agent/stream/{_DONE_JOB_UUID}")
 
-        assert "[DONE]" in resp.text
+        assert "event: done" in resp.text
+
+    async def test_streams_tokens_from_redis_list(self):
+        redis = _make_redis_with_job(status="done")
+        # First lrange returns tokens; flush call returns empty
+        redis.client.lrange = AsyncMock(side_effect=[["tok1", "tok2"], []])
+        app = make_app(redis=redis)
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.get(f"/agent/stream/{_VALID_JOB_UUID}")
+
+        assert "event: token" in resp.text
+        assert "tok1" in resp.text
+        assert "tok2" in resp.text
+        assert "event: done" in resp.text
+
+    async def test_streams_error_event_on_job_failure(self):
+        redis = _make_redis_with_job(status="error", error="LLM timeout")
+        app = make_app(redis=redis)
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.get(f"/agent/stream/{_VALID_JOB_UUID}")
+
+        assert "event: error" in resp.text
+        assert "job_failed" in resp.text
+        assert "LLM timeout" not in resp.text  # raw error must not reach client
 
     async def test_returns_404_for_unknown_job_in_stream(self):
         redis = make_redis_mock()

@@ -12,3 +12,12 @@ def job_key(job_id: str) -> str:
     route to the same cluster slot.
     """
     return f"{{agent:job:{job_id}}}"
+
+
+def token_stream_key(job_id: str) -> str:
+    """Redis List key for buffering streamed LLM tokens for a job.
+
+    Uses the same hash tag as job_key so both keys land on the same
+    cluster slot — required for Cluster-mode multi-key operations.
+    """
+    return f"{{agent:job:{job_id}}}:tokens"
