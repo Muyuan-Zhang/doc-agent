@@ -1,6 +1,7 @@
 """
 Tests for FastAPI app lifespan: startup/shutdown success and failure paths.
 """
+import contextlib
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -15,6 +16,25 @@ def _make_client_mock(name: str) -> AsyncMock:
     return m
 
 
+def _make_consistency_service_mock() -> AsyncMock:
+    m = AsyncMock()
+    m.start = AsyncMock()
+    m.stop = AsyncMock()
+    return m
+
+
+def _enter_all_patches(stack, postgres, redis, milvus, mq, consistency_mq, llm, svc):
+    stack.enter_context(patch("app.PostgreSQLClient", return_value=postgres))
+    stack.enter_context(patch("app.RedisClient", return_value=redis))
+    stack.enter_context(patch("app.MilvusClient", return_value=milvus))
+    stack.enter_context(patch("app.RedisStreamsMQClient", return_value=mq))
+    stack.enter_context(patch("app.ConsistencyMQClient", return_value=consistency_mq))
+    stack.enter_context(patch("app.OpenAILLMClient", return_value=llm))
+    stack.enter_context(patch("app.ConsistencyService", return_value=svc))
+    stack.enter_context(patch("app.CacheInvalidator"))
+    stack.enter_context(patch("app.ConsistencyConsumer"))
+
+
 class TestLifespanStartupSuccess:
     async def test_all_clients_connect_called_on_startup(self):
         from app import create_app
@@ -23,21 +43,19 @@ class TestLifespanStartupSuccess:
         redis = _make_client_mock("redis")
         milvus = _make_client_mock("milvus")
         mq = _make_client_mock("mq")
+        consistency_mq = _make_client_mock("consistency_mq")
         llm = _make_client_mock("llm")
+        svc = _make_consistency_service_mock()
 
-        with (
-            patch("app.PostgreSQLClient", return_value=postgres),
-            patch("app.RedisClient", return_value=redis),
-            patch("app.MilvusClient", return_value=milvus),
-            patch("app.RedisStreamsMQClient", return_value=mq),
-            patch("app.OpenAILLMClient", return_value=llm),
-        ):
+        with contextlib.ExitStack() as stack:
+            _enter_all_patches(stack, postgres, redis, milvus, mq, consistency_mq, llm, svc)
             app = create_app()
             async with app.router.lifespan_context(app):
                 postgres.connect.assert_awaited_once()
                 redis.connect.assert_awaited_once()
                 milvus.connect.assert_awaited_once()
                 mq.connect.assert_awaited_once()
+                consistency_mq.connect.assert_awaited_once()
                 llm.connect.assert_awaited_once()
 
     async def test_all_clients_attached_to_app_state_on_startup(self):
@@ -47,22 +65,38 @@ class TestLifespanStartupSuccess:
         redis = _make_client_mock("redis")
         milvus = _make_client_mock("milvus")
         mq = _make_client_mock("mq")
+        consistency_mq = _make_client_mock("consistency_mq")
         llm = _make_client_mock("llm")
+        svc = _make_consistency_service_mock()
 
-        with (
-            patch("app.PostgreSQLClient", return_value=postgres),
-            patch("app.RedisClient", return_value=redis),
-            patch("app.MilvusClient", return_value=milvus),
-            patch("app.RedisStreamsMQClient", return_value=mq),
-            patch("app.OpenAILLMClient", return_value=llm),
-        ):
+        with contextlib.ExitStack() as stack:
+            _enter_all_patches(stack, postgres, redis, milvus, mq, consistency_mq, llm, svc)
             app = create_app()
             async with app.router.lifespan_context(app):
                 assert app.state.postgres is postgres
                 assert app.state.redis is redis
                 assert app.state.milvus is milvus
                 assert app.state.mq is mq
+                assert app.state.consistency_mq is consistency_mq
                 assert app.state.llm is llm
+
+    async def test_consistency_service_started_on_startup(self):
+        from app import create_app
+
+        postgres = _make_client_mock("postgres")
+        redis = _make_client_mock("redis")
+        milvus = _make_client_mock("milvus")
+        mq = _make_client_mock("mq")
+        consistency_mq = _make_client_mock("consistency_mq")
+        llm = _make_client_mock("llm")
+        svc = _make_consistency_service_mock()
+
+        with contextlib.ExitStack() as stack:
+            _enter_all_patches(stack, postgres, redis, milvus, mq, consistency_mq, llm, svc)
+            app = create_app()
+            async with app.router.lifespan_context(app):
+                svc.start.assert_awaited_once()
+                assert app.state.consistency_service is svc
 
     async def test_all_clients_disconnect_called_on_shutdown(self):
         from app import create_app
@@ -71,15 +105,12 @@ class TestLifespanStartupSuccess:
         redis = _make_client_mock("redis")
         milvus = _make_client_mock("milvus")
         mq = _make_client_mock("mq")
+        consistency_mq = _make_client_mock("consistency_mq")
         llm = _make_client_mock("llm")
+        svc = _make_consistency_service_mock()
 
-        with (
-            patch("app.PostgreSQLClient", return_value=postgres),
-            patch("app.RedisClient", return_value=redis),
-            patch("app.MilvusClient", return_value=milvus),
-            patch("app.RedisStreamsMQClient", return_value=mq),
-            patch("app.OpenAILLMClient", return_value=llm),
-        ):
+        with contextlib.ExitStack() as stack:
+            _enter_all_patches(stack, postgres, redis, milvus, mq, consistency_mq, llm, svc)
             app = create_app()
             async with app.router.lifespan_context(app):
                 pass
@@ -88,7 +119,27 @@ class TestLifespanStartupSuccess:
         redis.disconnect.assert_awaited_once()
         milvus.disconnect.assert_awaited_once()
         mq.disconnect.assert_awaited_once()
+        consistency_mq.disconnect.assert_awaited_once()
         llm.disconnect.assert_awaited_once()
+
+    async def test_consistency_service_stopped_on_shutdown(self):
+        from app import create_app
+
+        postgres = _make_client_mock("postgres")
+        redis = _make_client_mock("redis")
+        milvus = _make_client_mock("milvus")
+        mq = _make_client_mock("mq")
+        consistency_mq = _make_client_mock("consistency_mq")
+        llm = _make_client_mock("llm")
+        svc = _make_consistency_service_mock()
+
+        with contextlib.ExitStack() as stack:
+            _enter_all_patches(stack, postgres, redis, milvus, mq, consistency_mq, llm, svc)
+            app = create_app()
+            async with app.router.lifespan_context(app):
+                pass
+
+        svc.stop.assert_awaited_once()
 
 
 class TestLifespanStartupFailure:
@@ -100,15 +151,12 @@ class TestLifespanStartupFailure:
         redis = _make_client_mock("redis")
         milvus = _make_client_mock("milvus")
         mq = _make_client_mock("mq")
+        consistency_mq = _make_client_mock("consistency_mq")
         llm = _make_client_mock("llm")
+        svc = _make_consistency_service_mock()
 
-        with (
-            patch("app.PostgreSQLClient", return_value=postgres),
-            patch("app.RedisClient", return_value=redis),
-            patch("app.MilvusClient", return_value=milvus),
-            patch("app.RedisStreamsMQClient", return_value=mq),
-            patch("app.OpenAILLMClient", return_value=llm),
-        ):
+        with contextlib.ExitStack() as stack:
+            _enter_all_patches(stack, postgres, redis, milvus, mq, consistency_mq, llm, svc)
             app = create_app()
             with pytest.raises(RuntimeError, match="DB unreachable"):
                 async with app.router.lifespan_context(app):
@@ -122,15 +170,12 @@ class TestLifespanStartupFailure:
         redis.connect = AsyncMock(side_effect=ConnectionError("Redis down"))
         milvus = _make_client_mock("milvus")
         mq = _make_client_mock("mq")
+        consistency_mq = _make_client_mock("consistency_mq")
         llm = _make_client_mock("llm")
+        svc = _make_consistency_service_mock()
 
-        with (
-            patch("app.PostgreSQLClient", return_value=postgres),
-            patch("app.RedisClient", return_value=redis),
-            patch("app.MilvusClient", return_value=milvus),
-            patch("app.RedisStreamsMQClient", return_value=mq),
-            patch("app.OpenAILLMClient", return_value=llm),
-        ):
+        with contextlib.ExitStack() as stack:
+            _enter_all_patches(stack, postgres, redis, milvus, mq, consistency_mq, llm, svc)
             app = create_app()
             with pytest.raises(ConnectionError, match="Redis down"):
                 async with app.router.lifespan_context(app):
@@ -148,15 +193,12 @@ class TestLifespanStartupFailure:
         milvus = _make_client_mock("milvus")
         milvus.connect = AsyncMock(side_effect=RuntimeError("Milvus offline"))
         mq = _make_client_mock("mq")
+        consistency_mq = _make_client_mock("consistency_mq")
         llm = _make_client_mock("llm")
+        svc = _make_consistency_service_mock()
 
-        with (
-            patch("app.PostgreSQLClient", return_value=postgres),
-            patch("app.RedisClient", return_value=redis),
-            patch("app.MilvusClient", return_value=milvus),
-            patch("app.RedisStreamsMQClient", return_value=mq),
-            patch("app.OpenAILLMClient", return_value=llm),
-        ):
+        with contextlib.ExitStack() as stack:
+            _enter_all_patches(stack, postgres, redis, milvus, mq, consistency_mq, llm, svc)
             app = create_app()
             with pytest.raises(RuntimeError, match="Milvus offline"):
                 async with app.router.lifespan_context(app):

@@ -77,6 +77,14 @@ class Settings(BaseSettings):
         default_factory=lambda: f"{socket.gethostname()}-{os.getpid()}"
     )
 
+    # M6 Consistency
+    consistency_consumer_group: str = "doc-agent-consistency"
+    consistency_consumer_name: str = Field(
+        default_factory=lambda: f"{socket.gethostname()}-{os.getpid()}-consistency"
+    )
+    cache_rag_namespace: str = "rag"
+    cache_invalidation_scan_batch: int = 100
+    cache_invalidation_max_iterations: int = 1000
     # M4 Agent
     agent_max_retries: int = 3
     agent_job_ttl_seconds: int = 3600

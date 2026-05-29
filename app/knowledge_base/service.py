@@ -120,3 +120,8 @@ class KnowledgeBaseService:
         if status is None:
             raise NotFoundError(f"Document {doc_id} not found")
         await self._store.delete_document(doc_id, self._pg, self._milvus)
+        await self._mq.publish({
+            "event": "kb_deleted",
+            "doc_id": doc_id,
+            "version": settings.knowledge_base_version,
+        })

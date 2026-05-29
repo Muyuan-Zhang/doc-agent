@@ -28,10 +28,11 @@ def _make_store(*, status_row=None) -> MagicMock:
 
 
 def _make_service(store: MagicMock | None = None) -> KnowledgeBaseService:
+    from unittest.mock import AsyncMock as _AsyncMock
     pg = MagicMock()
     redis = MagicMock()
     milvus = MagicMock()
-    mq = MagicMock()
+    mq = _AsyncMock()
     embedder = MagicMock()
     svc = KnowledgeBaseService(pg=pg, redis=redis, milvus=milvus, mq=mq, embedder=embedder)
     if store is not None:
@@ -156,3 +157,15 @@ class TestDeleteDocument:
         svc = _make_service(store)
         await svc.delete_document("d1")
         store.delete_document.assert_awaited_once()
+
+    async def test_publishes_kb_deleted_event_on_delete(self):
+        row = {"doc_id": "d1", "filename": "f.txt", "status": "indexed",
+               "chunk_count": 2, "version": "v1"}
+        store = _make_store(status_row=row)
+        svc = _make_service(store)
+        await svc.delete_document("d1")
+        svc._mq.publish.assert_awaited_once()
+        payload = svc._mq.publish.call_args[0][0]
+        assert payload["event"] == "kb_deleted"
+        assert payload["doc_id"] == "d1"
+        assert "version" in payload

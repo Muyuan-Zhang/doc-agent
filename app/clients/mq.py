@@ -44,11 +44,16 @@ class RedisStreamsMQClient(AbstractMQClient):
     M4 可透明替换为 RabbitMQ / Kafka 实现，只需实现 AbstractMQClient 接口。
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        stream: str | None = None,
+        group: str | None = None,
+        consumer: str | None = None,
+    ) -> None:
         self._client: aioredis.Redis | None = None
-        self._stream = settings.mq_stream_name
-        self._group = settings.mq_consumer_group
-        self._consumer = settings.mq_consumer_name
+        self._stream = stream if stream is not None else settings.mq_stream_name
+        self._group = group if group is not None else settings.mq_consumer_group
+        self._consumer = consumer if consumer is not None else settings.mq_consumer_name
 
     @property
     def client(self) -> aioredis.Redis:
@@ -111,3 +116,13 @@ class RedisStreamsMQClient(AbstractMQClient):
 
     async def ack(self, message_id: str) -> None:
         await self.client.xack(self._stream, self._group, message_id)
+
+
+class ConsistencyMQClient(RedisStreamsMQClient):
+    """Dedicated MQ consumer for the M6 consistency service with its own consumer group."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            group=settings.consistency_consumer_group,
+            consumer=settings.consistency_consumer_name,
+        )

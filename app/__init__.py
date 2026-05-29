@@ -9,9 +9,13 @@ from app.agent.graph import build_graph
 from app.cache.service import RagCacheService
 from app.clients.llm import OpenAILLMClient
 from app.clients.milvus import MilvusClient
-from app.clients.mq import RedisStreamsMQClient
+from app.clients.mq import ConsistencyMQClient, RedisStreamsMQClient
 from app.clients.postgresql import PostgreSQLClient
 from app.clients.redis import RedisClient
+from app.consistency.consumer import ConsistencyConsumer
+from app.consistency.invalidator import CacheInvalidator
+from app.consistency.service import ConsistencyService
+from app.core.config import settings
 from app.core.exceptions import register_exception_handlers
 from app.core.logging_config import setup_logging
 from app.middleware.registry import register_middlewares
@@ -37,11 +41,12 @@ async def _lifespan(app: FastAPI):
     # Each connected client is tracked; on failure, already-connected
     # clients are disconnected in reverse order before re-raising.
     named_clients = [
-        ("postgres", PostgreSQLClient()),
-        ("redis",    RedisClient()),
-        ("milvus",   MilvusClient()),
-        ("mq",       RedisStreamsMQClient()),
-        ("llm",      OpenAILLMClient()),
+        ("postgres",        PostgreSQLClient()),
+        ("redis",           RedisClient()),
+        ("milvus",          MilvusClient()),
+        ("mq",              RedisStreamsMQClient()),
+        ("consistency_mq",  ConsistencyMQClient()),
+        ("llm",             OpenAILLMClient()),
     ]
 
     connected: list = []
@@ -58,6 +63,17 @@ async def _lifespan(app: FastAPI):
                 logger.warning("Error during startup-failure cleanup: %s", exc)
         raise
 
+    invalidator = CacheInvalidator(app.state.redis, settings.cache_rag_namespace)
+    consumer = ConsistencyConsumer(
+        app.state.consistency_mq, invalidator, settings.knowledge_base_version
+    )
+    consistency_service = ConsistencyService(consumer)
+    app.state.consistency_service = consistency_service
+    await consistency_service.start()
+
+    yield
+
+    await app.state.consistency_service.stop()
     graph = build_graph(
         llm=app.state.llm,
         retriever=None,
