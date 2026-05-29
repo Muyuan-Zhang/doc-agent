@@ -2,11 +2,13 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+_SAFE_ID_PATTERN = r"^[a-zA-Z0-9_-]{1,64}$"
+
 
 class QueryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    session_id: str = Field(min_length=1)
+    session_id: str = Field(min_length=1, max_length=64, pattern=_SAFE_ID_PATTERN)
     query: str = Field(min_length=1, max_length=4096)
     top_k: int = Field(default=5, ge=1, le=100)
 
