@@ -17,7 +17,7 @@ help:
 	@echo "  test-integration all tests including @pytest.mark.integration"
 	@echo "  lint             ruff check + mypy"
 	@echo "  format           ruff format + ruff --fix"
-	@echo "  logs             tail all container logs"
+	@echo "  logs             tail all container logs (Ctrl+C to stop)"
 	@echo "  clean            remove __pycache__, .pytest_cache, *.pyc, logs/"
 
 install:
@@ -50,8 +50,7 @@ logs:
 	docker compose logs -f
 
 clean:
-	python -m ruff clean 2>/dev/null || true
-	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-	find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
-	find . -name "*.pyc" -delete 2>/dev/null || true
-	-rmdir /s /q logs 2>nul
+	python -c "import shutil, pathlib; [shutil.rmtree(p, ignore_errors=True) for p in pathlib.Path('.').rglob('__pycache__') if p.is_dir()]"
+	python -c "import shutil; shutil.rmtree('.pytest_cache', ignore_errors=True)"
+	python -c "import pathlib; [p.unlink(missing_ok=True) for p in pathlib.Path('.').rglob('*.pyc')]"
+	python -c "import shutil; shutil.rmtree('logs', ignore_errors=True)"

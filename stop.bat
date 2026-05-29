@@ -13,8 +13,8 @@ if exist .uvicorn.pid (
     )
     del .uvicorn.pid
 ) else (
-    echo .uvicorn.pid not found. Attempting fallback taskkill by window title...
-    taskkill /FI "WINDOWTITLE eq uvicorn*" /F > nul 2>&1
+    echo .uvicorn.pid not found. Attempting fallback via WMI process search...
+    powershell -NoProfile -Command "Get-WmiObject Win32_Process -Filter 'Name=''python.exe''' | Where-Object { $_.CommandLine -like '*uvicorn*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
     echo Fallback complete ^(process may have already exited^).
 )
 

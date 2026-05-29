@@ -7,20 +7,6 @@ MAKEFILE = ROOT / "Makefile"
 START_BAT = ROOT / "start.bat"
 STOP_BAT = ROOT / "stop.bat"
 
-REQUIRED_MAKE_TARGETS = [
-    "help",
-    "install",
-    "up",
-    "down",
-    "dev",
-    "test",
-    "test-integration",
-    "lint",
-    "format",
-    "logs",
-    "clean",
-]
-
 
 class TestMakefileExists:
     def test_makefile_is_present(self):
@@ -99,6 +85,14 @@ class TestMakefileCommands:
     def test_phony_declaration_present(self):
         assert ".PHONY" in self._content()
 
+    def test_clean_uses_python_not_unix_find(self):
+        content = self._content()
+        assert "shutil" in content
+        assert "find ." not in content
+
+    def test_clean_does_not_use_invalid_ruff_clean(self):
+        assert "ruff clean" not in self._content()
+
 
 class TestStartBatExists:
     def test_start_bat_is_present(self):
@@ -170,3 +164,10 @@ class TestStopBatContent:
     def test_handles_missing_pid_gracefully(self):
         content = self._content()
         assert "if exist" in content.lower() or "if not exist" in content.lower()
+
+    def test_fallback_does_not_rely_on_window_title(self):
+        assert "WINDOWTITLE" not in self._content()
+
+    def test_fallback_uses_wmi_commandline_match(self):
+        content = self._content()
+        assert "Win32_Process" in content or "CommandLine" in content
