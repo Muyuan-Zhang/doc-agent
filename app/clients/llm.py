@@ -22,7 +22,7 @@ class AbstractLLMClient(AbstractClient):
         """文本补全，返回模型输出字符串。"""
 
     @abstractmethod
-    def stream_complete(self, prompt: str, **kwargs) -> AsyncIterator[str]:
+    async def stream_complete(self, prompt: str, **kwargs) -> AsyncIterator[str]:
         """流式文本补全，逐 token yield 输出。"""
 
     @abstractmethod
@@ -89,10 +89,13 @@ class OpenAILLMClient(AbstractLLMClient):
                 max_tokens=max_tokens,
                 stream=True,
             )
-            async for chunk in stream:
-                content = chunk.choices[0].delta.content
-                if content:
-                    yield content
+            try:
+                async for chunk in stream:
+                    content = chunk.choices[0].delta.content
+                    if content:
+                        yield content
+            finally:
+                await stream.aclose()
 
     async def embed(self, text: str) -> list[float]:
         async with self._background_sem:
