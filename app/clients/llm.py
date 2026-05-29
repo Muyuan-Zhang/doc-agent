@@ -36,6 +36,7 @@ class OpenAILLMClient(AbstractLLMClient):
         self._client = None
         self._interactive_sem = asyncio.Semaphore(settings.llm_semaphore_limits.interactive)
         self._background_sem = asyncio.Semaphore(settings.llm_semaphore_limits.background)
+        self._audit_sem = asyncio.Semaphore(settings.llm_semaphore_limits.audit)
 
     async def connect(self) -> None:
         if not settings.openai_api_key:

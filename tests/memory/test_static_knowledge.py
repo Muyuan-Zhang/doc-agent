@@ -97,6 +97,17 @@ class TestAddFact:
         assert params["user_id"] == "user-1"
         assert params["content"] == "fact"
 
+    async def test_embed_error_propagates_without_storing(self):
+        llm = MagicMock()
+        llm.embed = AsyncMock(side_effect=RuntimeError("embedding service down"))
+        pg, conn = _make_pg()
+        milvus = _make_milvus()
+        store = StaticKnowledgeStore()
+        with pytest.raises(RuntimeError, match="embedding service down"):
+            await store.add_fact(pg, milvus, llm, "u", "content")
+        conn.execute.assert_not_awaited()
+        milvus.memory_insert.assert_not_awaited()
+
 
 class TestSearchFacts:
     async def test_empty_when_no_results(self):

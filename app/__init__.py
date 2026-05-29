@@ -1,8 +1,12 @@
+import asyncio
 import contextlib
 import logging
 
 from fastapi import FastAPI
 
+from app.agent.consumer import run_consumer
+from app.agent.graph import build_graph
+from app.cache.service import RagCacheService
 from app.clients.llm import OpenAILLMClient
 from app.clients.milvus import MilvusClient
 from app.clients.mq import ConsistencyMQClient, RedisStreamsMQClient
@@ -15,7 +19,13 @@ from app.core.config import settings
 from app.core.exceptions import register_exception_handlers
 from app.core.logging_config import setup_logging
 from app.middleware.registry import register_middlewares
+from app.retrieval.bm25 import BM25Strategy
+from app.retrieval.hybrid import ConcreteHybridRetriever
+from app.retrieval.reranker import LLMReranker
+from app.retrieval.router import router as retrieval_router
+from app.retrieval.vector import VectorStrategy
 from app.routers.agent import router as agent_router
+from app.routers.cache import router as cache_router
 from app.routers.health import router as health_router
 from app.routers.knowledge_base import router as kb_router
 from app.routers.memory import router as memory_router
@@ -64,6 +74,27 @@ async def _lifespan(app: FastAPI):
     yield
 
     await app.state.consistency_service.stop()
+    graph = build_graph(
+        llm=app.state.llm,
+        retriever=None,
+        redis=app.state.redis,
+    )
+    consumer_task = asyncio.create_task(
+        run_consumer(app.state.mq, graph, app.state.redis)
+    )
+    app.state.consumer_task = consumer_task
+    bm25 = BM25Strategy(pg=app.state.postgres)
+    vector = VectorStrategy(milvus=app.state.milvus, llm=app.state.llm)
+    reranker = LLMReranker(llm=app.state.llm)
+    app.state.retriever = ConcreteHybridRetriever(bm25=bm25, vector=vector, reranker=reranker)
+    # Build singleton services after all clients are connected.
+    app.state.cache_svc = RagCacheService(redis=app.state.redis, llm=app.state.llm)
+
+    yield
+
+    consumer_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await consumer_task
 
     for client in reversed(connected):
         try:
@@ -79,5 +110,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(agent_router)
     app.include_router(kb_router)
+    app.include_router(retrieval_router)
     app.include_router(memory_router)
+    app.include_router(cache_router)
     return app

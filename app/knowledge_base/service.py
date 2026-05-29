@@ -24,6 +24,14 @@ logger = logging.getLogger(__name__)
 
 _ALLOWED = {"pdf", "txt"}
 _MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
+_MAGIC_BYTES: dict[str, bytes] = {
+    "pdf": b"%PDF-",
+}
+
+
+def _check_magic(ext: str, data: bytes) -> bool:
+    magic = _MAGIC_BYTES.get(ext)
+    return data[: len(magic)] == magic if magic else True
 
 
 class KnowledgeBaseService:
@@ -53,7 +61,8 @@ class KnowledgeBaseService:
         )
 
     async def prepare_upload(self, file: UploadFile) -> tuple[str, Path]:
-        filename = file.filename or "upload"
+        raw_name = file.filename or "upload"
+        filename = Path(raw_name).name[:256] or "upload"
         ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
         if ext not in _ALLOWED:
             raise ValidationError(f"Unsupported file type: {ext!r}. Allowed: {', '.join(sorted(_ALLOWED))}")
@@ -63,6 +72,8 @@ class KnowledgeBaseService:
             raise ValidationError(
                 f"File exceeds maximum allowed size of {_MAX_UPLOAD_BYTES // (1024 * 1024)} MB"
             )
+        if not _check_magic(ext, content):
+            raise ValidationError(f"File content does not match declared type: {ext!r}")
 
         doc_id = str(uuid.uuid4())
         fd, tmp_name = tempfile.mkstemp(suffix=f".{ext}")
