@@ -152,6 +152,10 @@ class MilvusClient(AbstractClient):
                 entity = {f: hit.entity.get(f) for f in output_fields}
                 entity["score"] = hit.score
                 hits.append(entity)
+            return hits
+
+        return await self._run_sync(_search)
+
     async def ensure_memory_collection(self) -> None:
         """Idempotently create the memory-vectors collection with HNSW index."""
         def _ensure() -> None:

@@ -41,8 +41,15 @@ class OpenAILLMClient(AbstractLLMClient):
     async def connect(self) -> None:
         if not settings.openai_api_key:
             raise RuntimeError("OPENAI_API_KEY is required but not set")
-        self._client = AsyncOpenAI(api_key=settings.openai_api_key)
-        logger.info("OpenAI LLM client created model=%s", settings.openai_embedding_model)
+        kwargs = {"api_key": settings.openai_api_key}
+        if settings.openai_base_url:
+            kwargs["base_url"] = settings.openai_base_url
+        self._client = AsyncOpenAI(**kwargs)
+        logger.info(
+            "OpenAI LLM client created model=%s base_url=%s",
+            settings.openai_embedding_model,
+            settings.openai_base_url or "default",
+        )
 
     async def disconnect(self) -> None:
         if self._client:
