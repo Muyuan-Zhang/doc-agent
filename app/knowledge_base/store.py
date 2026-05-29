@@ -29,10 +29,13 @@ CREATE TABLE IF NOT EXISTS chunks_metadata (
     chunk_index     INT          NOT NULL,
     parent_chunk_id VARCHAR(255),
     content_hash    VARCHAR(64)  NOT NULL UNIQUE,
-    version         VARCHAR(100) NOT NULL
+    version         VARCHAR(100) NOT NULL,
+    content         TEXT         NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_chunks_doc_id ON chunks_metadata(doc_id);
 CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
+CREATE INDEX IF NOT EXISTS idx_chunks_content_fts
+    ON chunks_metadata USING gin(to_tsvector('english', content));
 """
 
 
@@ -122,6 +125,7 @@ class KnowledgeBaseStore:
                 "parent_chunk_id": c.parent_chunk_id,
                 "content_hash": c.content_hash,
                 "version": c.version,
+                "content": c.content,
             }
             for c in chunks
         ]
@@ -129,9 +133,9 @@ class KnowledgeBaseStore:
             await conn.execute(
                 text("""
                     INSERT INTO chunks_metadata
-                        (chunk_id, doc_id, section_id, chunk_index, parent_chunk_id, content_hash, version)
+                        (chunk_id, doc_id, section_id, chunk_index, parent_chunk_id, content_hash, version, content)
                     VALUES
-                        (:chunk_id, :doc_id, :section_id, :chunk_index, :parent_chunk_id, :content_hash, :version)
+                        (:chunk_id, :doc_id, :section_id, :chunk_index, :parent_chunk_id, :content_hash, :version, :content)
                     ON CONFLICT (content_hash) DO NOTHING
                 """),
                 rows,
@@ -148,6 +152,7 @@ class KnowledgeBaseStore:
                 "chunk_index": c.chunk_index,
                 "version": c.version,
                 "content": c.content[:4096],
+                "content_hash": c.content_hash,
                 "embedding": c.embedding,
             }
             for c in chunks

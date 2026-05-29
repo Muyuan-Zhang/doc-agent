@@ -51,11 +51,24 @@ class Settings(BaseSettings):
     # LLM concurrency: three independent semaphore buckets
     llm_semaphore_limits: LLMSemaphoreLimits = LLMSemaphoreLimits()
 
+    # M2 Retrieval
+    bm25_top_k: int = 20
+    vector_top_k: int = 20
+    rrf_k: int = 60
+    rerank_top_n: int = 10
+    final_top_k: int = 5
     # M5 Memory
     memory_recent_max_turns: int = 20
     memory_recent_ttl_seconds: int = 86400
     memory_summary_threshold: int = 15
     memory_milvus_collection: str = "memory_vectors"
+
+    # M3 RAG Cache
+    cache_ttl_seconds: int = 3600
+    cache_auto_approve_threshold: int = 3
+    cache_rewrite_enabled: bool = True
+    cache_max_pending_reviews: int = 100
+    cache_api_key: str = ""  # required for approve/reject/delete; empty disables auth
 
     # Redis Streams MQ
     mq_stream_name: str = "doc-agent:tasks"

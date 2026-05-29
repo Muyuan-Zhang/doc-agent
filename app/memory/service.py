@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import time
 
 from app.clients.llm import AbstractLLMClient
 from app.clients.milvus import MilvusClient
@@ -11,6 +13,36 @@ from app.memory.static_knowledge import StaticKnowledgeStore
 from app.memory.summary import SummaryMemoryStore
 
 logger = logging.getLogger(__name__)
+
+_CLEAR_RETRIES = 3
+_CLEAR_RETRY_DELAY = 0.2  # seconds; multiplied by attempt number
+
+
+async def _clear_with_retry(
+    recent: RecentMemoryStore, redis: RedisClient, session_id: str
+) -> None:
+    """Retry clearing recent turns to guard against transient Redis failures.
+
+    The summary is already persisted; if clear keeps failing we log and move on
+    rather than surfacing an error that would lose the compacted summary.
+    """
+    for attempt in range(1, _CLEAR_RETRIES + 1):
+        try:
+            await recent.clear(redis, session_id)
+            return
+        except Exception as exc:
+            if attempt == _CLEAR_RETRIES:
+                logger.error(
+                    "clear recent turns failed after %d retries session=%s: %s",
+                    _CLEAR_RETRIES,
+                    session_id,
+                    exc,
+                )
+                return
+            logger.warning(
+                "clear recent turns attempt %d failed session=%s: %s", attempt, session_id, exc
+            )
+            await asyncio.sleep(_CLEAR_RETRY_DELAY * attempt)
 
 
 class MemoryService:
@@ -32,15 +64,20 @@ class MemoryService:
     async def append_turn(
         self, session_id: str, user_id: str, role: str, content: str
     ) -> None:
-        import time
         turn = ConversationTurn(
             session_id=session_id, role=role, content=content, ts=time.time()
         )
         count = await self._recent.append_turn(self._redis, session_id, turn)
         if count >= settings.memory_summary_threshold:
             turns = await self._recent.get_turns(self._redis, session_id)
-            await self._summary.compact(self._pg, self._llm, user_id, session_id, turns)
-            await self._recent.clear(self._redis, session_id)
+            previous = await self._summary.get_latest_summary(
+                self._pg, user_id, session_id
+            )
+            await self._summary.compact(
+                self._pg, self._llm, user_id, session_id, turns,
+                previous_summary=previous,
+            )
+            await _clear_with_retry(self._recent, self._redis, session_id)
             logger.info("Auto-compacted session=%s after %d turns", session_id, count)
 
     async def retrieve_context(
@@ -50,7 +87,7 @@ class MemoryService:
         query_embedding: list[float] | None = None,
     ) -> MemoryContext:
         turns = await self._recent.get_turns(self._redis, session_id)
-        summary = await self._summary.get_latest_summary(self._pg, user_id)
+        summary = await self._summary.get_latest_summary(self._pg, user_id, session_id)
         static_facts: list[StaticFact] = []
         if query_embedding is not None:
             static_facts = await self._static.search_facts(
@@ -60,10 +97,12 @@ class MemoryService:
 
     async def summarize_session(self, session_id: str, user_id: str) -> MemorySummary:
         turns = await self._recent.get_turns(self._redis, session_id)
+        previous = await self._summary.get_latest_summary(self._pg, user_id, session_id)
         summary = await self._summary.compact(
-            self._pg, self._llm, user_id, session_id, turns
+            self._pg, self._llm, user_id, session_id, turns,
+            previous_summary=previous,
         )
-        await self._recent.clear(self._redis, session_id)
+        await _clear_with_retry(self._recent, self._redis, session_id)
         return summary
 
     async def add_static_fact(self, user_id: str, content: str) -> StaticFact:

@@ -1,9 +1,12 @@
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, UploadFile
 from fastapi import Path as PathParam
 
 from app.core.config import settings
+from app.core.rate_limit import rate_limiter
 from app.knowledge_base.embedder import ChunkEmbedder
 from app.knowledge_base.service import KnowledgeBaseService
+
+_upload_rate_limit = rate_limiter("kb:upload", limit=10, window_seconds=60)
 
 router = APIRouter(prefix="/knowledge-base", tags=["knowledge-base"])
 
@@ -25,7 +28,7 @@ def _get_service(request: Request) -> KnowledgeBaseService:
         raise HTTPException(status_code=503, detail="Service dependencies not ready") from exc
 
 
-@router.post("/documents", status_code=202)
+@router.post("/documents", status_code=202, dependencies=[Depends(_upload_rate_limit)])
 async def upload_document(
     file: UploadFile,
     background_tasks: BackgroundTasks,

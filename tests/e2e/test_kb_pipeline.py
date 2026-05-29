@@ -16,6 +16,7 @@ from httpx import ASGITransport, AsyncClient
 def _make_client(ping_ok: bool = True) -> MagicMock:
     m = MagicMock()
     m.ping = AsyncMock(return_value=ping_ok)
+    m.increment_with_ttl = AsyncMock(return_value=1)
     return m
 
 
@@ -182,4 +183,43 @@ class TestDeleteDocumentEndpoint:
         app = _app_with_state()
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             r = await c.delete("/knowledge-base/documents/not-a-uuid")
+        assert r.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting — POST /knowledge-base/documents (limit: 10/min)
+# ---------------------------------------------------------------------------
+
+class TestUploadRateLimiting:
+    async def test_returns_429_when_rate_limit_exceeded(self):
+        app = _app_with_state()
+        app.state.redis.increment_with_ttl = AsyncMock(return_value=11)  # over limit of 10
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post(
+                "/knowledge-base/documents",
+                files={"file": ("test.txt", io.BytesIO(b"hello"), "text/plain")},
+            )
+        assert r.status_code == 429
+        assert "Rate limit exceeded" in r.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Magic-byte validation — PDF content must start with %PDF-
+# ---------------------------------------------------------------------------
+
+class TestUploadMagicBytesValidation:
+    async def test_pdf_without_magic_bytes_returns_422(self):
+        app = _app_with_state()
+        with patch("app.routers.knowledge_base.KnowledgeBaseService") as mock_svc_cls:
+            from app.core.exceptions import ValidationError
+            svc = AsyncMock()
+            svc.prepare_upload = AsyncMock(
+                side_effect=ValidationError("File content does not match declared type: 'pdf'")
+            )
+            mock_svc_cls.return_value = svc
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+                r = await c.post(
+                    "/knowledge-base/documents",
+                    files={"file": ("report.pdf", io.BytesIO(b"FAKE CONTENT"), "application/pdf")},
+                )
         assert r.status_code == 422

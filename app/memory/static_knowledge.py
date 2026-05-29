@@ -24,7 +24,11 @@ class StaticKnowledgeStore:
     ) -> StaticFact:
         content_hash = hashlib.sha256(content.encode()).hexdigest()
         fact_id = str(uuid.uuid4())
+
+        # Embed before writing to PG — if this fails, the caller can retry cleanly.
+        # Storing in PG without a vector would create an un-retrievable orphan record.
         embedding = await llm.embed(content)
+
         async with pg.engine.begin() as conn:
             await conn.execute(
                 text("""
@@ -39,12 +43,14 @@ class StaticKnowledgeStore:
                     "content_hash": content_hash,
                 },
             )
+
         await milvus.memory_insert([{
             "fact_id": fact_id,
             "user_id": user_id,
             "content": content[:4096],
             "embedding": embedding,
         }])
+
         logger.info("Added static fact user=%s fact_id=%s", user_id, fact_id)
         return StaticFact(
             fact_id=fact_id,
