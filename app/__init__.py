@@ -71,30 +71,32 @@ async def _lifespan(app: FastAPI):
     app.state.consistency_service = consistency_service
     await consistency_service.start()
 
-    yield
+    await app.state.milvus.ensure_kb_collection()
+    await app.state.milvus.ensure_memory_collection()
 
-    await app.state.consistency_service.stop()
+    bm25 = BM25Strategy(pg=app.state.postgres)
+    vector = VectorStrategy(milvus=app.state.milvus, llm=app.state.llm)
+    reranker = LLMReranker(llm=app.state.llm)
+    app.state.retriever = ConcreteHybridRetriever(bm25=bm25, vector=vector, reranker=reranker)
+    app.state.cache_svc = RagCacheService(redis=app.state.redis, llm=app.state.llm)
+
     graph = build_graph(
         llm=app.state.llm,
-        retriever=None,
+        retriever=app.state.retriever,
         redis=app.state.redis,
     )
     consumer_task = asyncio.create_task(
         run_consumer(app.state.mq, graph, app.state.redis)
     )
     app.state.consumer_task = consumer_task
-    bm25 = BM25Strategy(pg=app.state.postgres)
-    vector = VectorStrategy(milvus=app.state.milvus, llm=app.state.llm)
-    reranker = LLMReranker(llm=app.state.llm)
-    app.state.retriever = ConcreteHybridRetriever(bm25=bm25, vector=vector, reranker=reranker)
-    # Build singleton services after all clients are connected.
-    app.state.cache_svc = RagCacheService(redis=app.state.redis, llm=app.state.llm)
 
     yield
 
     consumer_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await consumer_task
+
+    await app.state.consistency_service.stop()
 
     for client in reversed(connected):
         try:

@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS chunks_metadata (
     chunk_index     INT          NOT NULL,
     parent_chunk_id VARCHAR(255),
     content_hash    VARCHAR(64)  NOT NULL UNIQUE,
-    version         VARCHAR(100) NOT NULL
+    version         VARCHAR(100) NOT NULL,
+    content         TEXT         NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_chunks_doc_id ON chunks_metadata(doc_id);

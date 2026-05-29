@@ -33,14 +33,12 @@
       "Bash(git push *)",
       "Bash(git *)",
       "Bash(Get-ChildItem *)",
-      "Bash(gh pr create --title 'fix\\(security\\): input validation, rate limiting & magic-byte check' --body ' *)",
       "PowerShell(Get-Command *)",
       "Bash(gh pr *)",
       "PowerShell(gh pr *)",
       "PowerShell(git remote *)",
       "mcp__plugin_ecc_github__list_pull_requests",
       "Bash(python -c *)"
-      "Bash(Get-ChildItem *)"
     ],
     "deny": [
       "Bash(rm -rf *)",
