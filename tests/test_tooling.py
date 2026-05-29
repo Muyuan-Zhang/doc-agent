@@ -78,7 +78,7 @@ class TestMakefileCommands:
         assert "--wait" in content
 
     def test_down_uses_docker_compose_down(self):
-        assert "docker compose down" in content() if False else "docker compose down" in self._content()
+        assert "docker compose down" in self._content()
 
     def test_test_excludes_integration_by_default(self):
         assert "not integration" in self._content()
