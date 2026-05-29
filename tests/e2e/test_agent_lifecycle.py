@@ -16,16 +16,17 @@ from tests.e2e.conftest import make_app
 
 
 class _StatefulRedisInner:
-    """In-memory Redis stand-in that maintains hash state across calls."""
+    """In-memory Redis stand-in that maintains hash and list state across calls."""
 
     def __init__(self):
-        self._store: dict[str, dict] = defaultdict(dict)
+        self._hashes: dict[str, dict] = defaultdict(dict)
+        self._lists: dict[str, list] = defaultdict(list)
 
     async def hset(self, key: str, mapping: dict) -> None:
-        self._store[key].update(mapping)
+        self._hashes[key].update(mapping)
 
     async def hgetall(self, key: str) -> dict:
-        return dict(self._store[key])
+        return dict(self._hashes[key])
 
     async def expire(self, key: str, ttl: int) -> None:
         pass
@@ -34,20 +35,23 @@ class _StatefulRedisInner:
         pass
 
     async def rpush(self, key: str, *values) -> int:
-        return 1
+        self._lists[key].extend(values)
+        return len(self._lists[key])
 
     async def ltrim(self, *args) -> None:
         pass
 
     async def llen(self, key: str) -> int:
-        return 0
+        return len(self._lists[key])
 
     async def lrange(self, key: str, start: int, end: int) -> list:
-        return []
+        data = self._lists[key]
+        return data[start:] if end == -1 else data[start: end + 1]
 
     async def delete(self, *keys) -> None:
         for k in keys:
-            self._store.pop(k, None)
+            self._hashes.pop(k, None)
+            self._lists.pop(k, None)
 
 
 def _make_stateful_redis() -> MagicMock:
@@ -118,12 +122,12 @@ class TestAgentJobLifecycle:
             assert data["answer"] == "FastAPI is fast and async."
             assert data["job_id"] == job_id
 
-            # 4. SSE stream delivers answer + [DONE]
+            # 4. SSE stream delivers event: done
+            # (no token events — the graph mock bypasses generate, so no RPUSH occurs)
             resp = await c.get(f"/agent/stream/{job_id}")
             assert resp.status_code == 200
             assert "text/event-stream" in resp.headers["content-type"]
-            assert "FastAPI is fast and async." in resp.text
-            assert "[DONE]" in resp.text
+            assert "event: done" in resp.text
 
     async def test_failure_lifecycle(self):
         redis = _make_stateful_redis()
@@ -156,8 +160,9 @@ class TestAgentJobLifecycle:
             assert data["status"] == "error"
             assert "ValueError" in (data["error"] or "")
 
-            # 4. SSE stream delivers [ERROR]
+            # 4. SSE stream delivers event: error with opaque code (raw error is server-only)
             resp = await c.get(f"/agent/stream/{job_id}")
             assert resp.status_code == 200
-            assert "[ERROR]" in resp.text
-            assert "ValueError" in resp.text
+            assert "event: error" in resp.text
+            assert "job_failed" in resp.text
+            assert "ValueError" not in resp.text
