@@ -58,8 +58,10 @@ function updateBadge(badge, status) {
   badge.textContent = status;
 }
 
-async function pollDocStatus(docId, badge) {
-  for (;;) {
+// Backend writes "indexed" on success, "failed" on error (DocumentStatus literal).
+// Cap at 150 attempts (~5 min at 2 s each) to avoid an infinite loop on stuck jobs.
+async function pollDocStatus(docId, badge, maxAttempts = 150) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     await new Promise(r => setTimeout(r, 2000));
     try {
       const res = await fetch(`/knowledge-base/documents/${docId}/status`);
@@ -69,12 +71,12 @@ async function pollDocStatus(docId, badge) {
         return;
       }
       const { status } = await res.json();
-      if (status === "ready" || status === "done") {
+      if (status === "indexed" || status === "ready" || status === "done") {
         updateBadge(badge, "ready");
         uploadedFiles.get(docId).status = "ready";
         return;
       }
-      if (status === "error" || status === "failed") {
+      if (status === "failed" || status === "error") {
         updateBadge(badge, "error");
         uploadedFiles.get(docId).status = "error";
         return;
@@ -85,6 +87,9 @@ async function pollDocStatus(docId, badge) {
       return;
     }
   }
+  // Timed out waiting for ingestion
+  updateBadge(badge, "error");
+  if (uploadedFiles.has(docId)) uploadedFiles.get(docId).status = "error";
 }
 
 async function uploadFile(file) {
