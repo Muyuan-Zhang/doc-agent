@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from abc import abstractmethod
+from typing import AsyncIterator
 
 from openai import AsyncOpenAI
 
@@ -19,6 +20,10 @@ class AbstractLLMClient(AbstractClient):
     @abstractmethod
     async def complete(self, prompt: str, **kwargs) -> str:
         """文本补全，返回模型输出字符串。"""
+
+    @abstractmethod
+    async def stream_complete(self, prompt: str, **kwargs) -> AsyncIterator[str]:
+        """流式文本补全，逐 token yield 输出。"""
 
     @abstractmethod
     async def embed(self, text: str) -> list[float]:
@@ -74,6 +79,23 @@ class OpenAILLMClient(AbstractLLMClient):
                 max_tokens=max_tokens,
             )
             return resp.choices[0].message.content or ""
+
+    async def stream_complete(self, prompt: str, **kwargs) -> AsyncIterator[str]:
+        max_tokens = kwargs.get("max_tokens", 512)
+        async with self._interactive_sem:
+            stream = await self._client.chat.completions.create(
+                model=settings.openai_chat_model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=max_tokens,
+                stream=True,
+            )
+            try:
+                async for chunk in stream:
+                    content = chunk.choices[0].delta.content
+                    if content:
+                        yield content
+            finally:
+                await stream.aclose()
 
     async def embed(self, text: str) -> list[float]:
         async with self._background_sem:

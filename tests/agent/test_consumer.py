@@ -110,6 +110,35 @@ class TestProcessMessage:
         statuses = [c.kwargs.get("mapping", {}).get("status") for c in hset_calls]
         assert "error" in statuses
 
+    async def test_token_stream_key_is_expired_on_success(self):
+        from app.agent._keys import token_stream_key
+
+        msg = _make_msg(job_id="j-tok")
+        graph = _make_graph_mock()
+        redis = _make_redis_mock()
+        mq = MagicMock()
+        mq.ack = AsyncMock()
+
+        await _process_message(msg, graph, redis, mq)
+
+        expire_keys = [c.args[0] for c in redis.client.expire.await_args_list]
+        assert token_stream_key("j-tok") in expire_keys
+
+    async def test_token_stream_key_is_expired_on_error(self):
+        from app.agent._keys import token_stream_key
+
+        msg = _make_msg(job_id="j-tok-err")
+        graph = MagicMock()
+        graph.ainvoke = AsyncMock(side_effect=RuntimeError("boom"))
+        redis = _make_redis_mock()
+        mq = MagicMock()
+        mq.ack = AsyncMock()
+
+        await _process_message(msg, graph, redis, mq)
+
+        expire_keys = [c.args[0] for c in redis.client.expire.await_args_list]
+        assert token_stream_key("j-tok-err") in expire_keys
+
     async def test_error_message_stored_in_redis(self):
         msg = _make_msg(job_id="j-fail2")
         graph = MagicMock()

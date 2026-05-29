@@ -7,7 +7,7 @@ the FastAPI lifespan shuts down.
 import asyncio
 import logging
 
-from app.agent._keys import job_key
+from app.agent._keys import job_key, token_stream_key
 from app.agent.state import AgentState
 from app.clients.mq import MQMessage
 from app.core.config import settings
@@ -18,10 +18,18 @@ logger = logging.getLogger(__name__)
 JOB_STATUS_KEY = job_key
 
 
-async def _set_job_status(redis, job_id: str, status: str, **extra) -> None:
+async def _set_job_status(
+    redis,
+    job_id: str,
+    status: str,
+    *,
+    answer: str = "",
+    error: str = "",
+) -> None:
     key = job_key(job_id)
-    await redis.client.hset(key, mapping={"status": status, **extra})
+    await redis.client.hset(key, mapping={"status": status, "answer": answer, "error": error})
     await redis.client.expire(key, settings.agent_job_ttl_seconds)
+    await redis.client.expire(token_stream_key(job_id), settings.agent_job_ttl_seconds)
 
 
 async def _process_message(msg: MQMessage, graph, redis, mq) -> None:
@@ -40,14 +48,14 @@ async def _process_message(msg: MQMessage, graph, redis, mq) -> None:
             "error": None,
         }
         result = await graph.ainvoke(state)
-        await _set_job_status(redis, job_id, "done", answer=result.get("answer", ""), error="")
+        await _set_job_status(redis, job_id, "done", answer=result.get("answer", ""))
     except asyncio.CancelledError:
         raise
     except Exception as exc:
         logger.error("Job %s failed: %s", job_id, exc)
         logger.debug("Job %s exception detail:", job_id, exc_info=True)
         error_msg = f"{type(exc).__name__}: job processing failed"
-        await _set_job_status(redis, job_id, "error", answer="", error=error_msg)
+        await _set_job_status(redis, job_id, "error", error=error_msg)
     finally:
         await mq.ack(msg.id)
 

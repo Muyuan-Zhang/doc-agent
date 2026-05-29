@@ -202,38 +202,77 @@ class TestRerank:
 # generate
 # ---------------------------------------------------------------------------
 
+def _make_stream(tokens: list[str]):
+    async def _gen(prompt, **kwargs):
+        for token in tokens:
+            yield token
+    return _gen
+
+
+def _make_redis_for_generate() -> MagicMock:
+    redis = MagicMock()
+    inner = MagicMock()
+    inner.rpush = AsyncMock()
+    redis.client = inner
+    return redis
+
+
 class TestGenerate:
-    async def test_fills_answer_using_llm(self):
+    async def test_fills_answer_from_streamed_tokens(self):
         chunk = _chunk(content="FastAPI is a web framework for Python.")
         llm = MagicMock()
-        llm.complete = AsyncMock(return_value="FastAPI is a fast Python web framework.")
+        llm.stream_complete = _make_stream(["FastAPI", " is", " fast."])
+        redis = _make_redis_for_generate()
         state = _state(reranked_chunks=[chunk], query="what is fastapi?")
 
-        result = await generate(state, llm=llm, retriever=None, redis=None)
+        result = await generate(state, llm=llm, retriever=None, redis=redis)
 
-        assert result["answer"] == "FastAPI is a fast Python web framework."
-        llm.complete.assert_awaited_once()
+        assert result["answer"] == "FastAPI is fast."
+
+    async def test_pushes_each_token_to_redis_list(self):
+        from app.agent._keys import token_stream_key
+
+        llm = MagicMock()
+        llm.stream_complete = _make_stream(["Hello", " World"])
+        redis = _make_redis_for_generate()
+        state = _state(reranked_chunks=[], job_id="job-x", query="q")
+
+        await generate(state, llm=llm, retriever=None, redis=redis)
+
+        assert redis.client.rpush.await_count == 2
+        calls = redis.client.rpush.call_args_list
+        expected_key = token_stream_key("job-x")
+        assert calls[0].args[0] == expected_key
+        assert calls[0].args[1] == "Hello"
+        assert calls[1].args[1] == " World"
 
     async def test_includes_chunk_content_in_prompt(self):
         chunk = _chunk(content="unique content marker xyz")
+        captured: list[str] = []
+
+        async def _capturing_stream(prompt, **kwargs):
+            captured.append(prompt)
+            yield "answer"
+
         llm = MagicMock()
-        llm.complete = AsyncMock(return_value="answer")
+        llm.stream_complete = _capturing_stream
+        redis = _make_redis_for_generate()
         state = _state(reranked_chunks=[chunk], query="q")
 
-        await generate(state, llm=llm, retriever=None, redis=None)
+        await generate(state, llm=llm, retriever=None, redis=redis)
 
-        prompt_arg = llm.complete.call_args[0][0]
-        assert "unique content marker xyz" in prompt_arg
+        assert "unique content marker xyz" in captured[0]
 
-    async def test_still_calls_llm_on_empty_chunks(self):
+    async def test_still_streams_on_empty_chunks(self):
         llm = MagicMock()
-        llm.complete = AsyncMock(return_value="I don't have enough context to answer.")
+        llm.stream_complete = _make_stream(["I don't have enough context to answer."])
+        redis = _make_redis_for_generate()
         state = _state(reranked_chunks=[], query="what is fastapi?")
 
-        result = await generate(state, llm=llm, retriever=None, redis=None)
+        result = await generate(state, llm=llm, retriever=None, redis=redis)
 
-        llm.complete.assert_awaited_once()
         assert result["answer"] == "I don't have enough context to answer."
+        assert redis.client.rpush.await_count == 1
 
 
 # ---------------------------------------------------------------------------
