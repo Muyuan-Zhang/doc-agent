@@ -11,3 +11,6 @@ build/
 .env
 .venv/
 venv/
+
+# Claude Code local session settings (per-developer, not shared)
+.claude/settings.local.json
