@@ -33,14 +33,20 @@ class TestBuildGraph:
 
     async def test_graph_invocation_end_to_end(self):
         chunk = _chunk()
+
+        async def _mock_stream(prompt, **kwargs):
+            yield "A great answer."
+
         llm = MagicMock()
-        llm.complete = AsyncMock(return_value="A great answer.")
+        llm.complete = AsyncMock(return_value="rewritten query")
+        llm.stream_complete = _mock_stream
         retriever = MagicMock()
         retriever.retrieve = AsyncMock(return_value=[chunk])
         redis = MagicMock()
         redis.cache_key = MagicMock(return_value="v1:rag:sess1:abc")
         inner = MagicMock()
         inner.setex = AsyncMock()
+        inner.rpush = AsyncMock()
         redis.client = inner
 
         graph = build_graph(llm=llm, retriever=retriever, redis=redis)
@@ -59,3 +65,4 @@ class TestBuildGraph:
         assert result["answer"] == "A great answer."
         retriever.retrieve.assert_awaited_once()
         inner.setex.assert_awaited_once()
+        inner.rpush.assert_awaited_once()

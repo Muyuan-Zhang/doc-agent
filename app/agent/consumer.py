@@ -7,7 +7,7 @@ the FastAPI lifespan shuts down.
 import asyncio
 import logging
 
-from app.agent._keys import job_key
+from app.agent._keys import job_key, token_stream_key
 from app.agent.state import AgentState
 from app.clients.mq import MQMessage
 from app.core.config import settings
@@ -22,6 +22,7 @@ async def _set_job_status(redis, job_id: str, status: str, **extra) -> None:
     key = job_key(job_id)
     await redis.client.hset(key, mapping={"status": status, **extra})
     await redis.client.expire(key, settings.agent_job_ttl_seconds)
+    await redis.client.expire(token_stream_key(job_id), settings.agent_job_ttl_seconds)
 
 
 async def _process_message(msg: MQMessage, graph, redis, mq) -> None:

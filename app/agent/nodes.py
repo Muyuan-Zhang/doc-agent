@@ -9,6 +9,7 @@ can call each node with only the state argument.
 import hashlib
 import logging
 
+from app.agent._keys import token_stream_key
 from app.agent.state import AgentState
 from app.core.config import settings
 
@@ -76,8 +77,12 @@ async def generate(state: AgentState, *, llm, retriever, redis) -> dict:
         f"Context:\n{raw_context}\n\n"
         f"Question: {state['query']}\n\nAnswer:"
     )
-    answer = await llm.complete(prompt)
-    return {"answer": answer}
+    stream_key = token_stream_key(state["job_id"])
+    tokens: list[str] = []
+    async for token in llm.stream_complete(prompt):
+        tokens.append(token)
+        await redis.client.rpush(stream_key, token)
+    return {"answer": "".join(tokens)}
 
 
 async def cache_write(state: AgentState, *, llm, retriever, redis) -> dict:
