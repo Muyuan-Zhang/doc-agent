@@ -69,7 +69,7 @@ async function deleteDocument(docId, li, deleteBtn) {
   deleteBtn.disabled = true;
   try {
     const res = await fetch(`/knowledge-base/documents/${docId}`, { method: "DELETE" });
-    if (res.status === 204 || res.ok) {
+    if (res.ok) {
       uploadedFiles.delete(docId);
       li.remove();
     } else {

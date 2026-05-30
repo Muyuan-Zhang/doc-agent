@@ -262,3 +262,15 @@ class TestDeleteDocument:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             resp = await c.delete(f"/knowledge-base/documents/{self._DOC_UUID}")
         _assert_security_headers(resp.headers)
+
+    async def test_delete_returns_404_when_doc_not_found(self):
+        app = make_app(mq=_make_mq_mock())  # pg fetchone defaults to None → NotFoundError
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.delete(f"/knowledge-base/documents/{self._DOC_UUID}")
+        assert resp.status_code == 404
+
+    async def test_delete_returns_422_for_invalid_uuid(self):
+        app = make_app()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.delete("/knowledge-base/documents/not-a-uuid")
+        assert resp.status_code == 422
