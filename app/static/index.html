@@ -10,6 +10,12 @@
   <div id="app">
     <header>
       <h1>Doc Agent</h1>
+      <nav id="nav-tabs">
+        <button class="nav-tab active" data-panel="chat">💬 Chat</button>
+        <button class="nav-tab" data-panel="retrieval">🔍 Retrieval</button>
+        <button class="nav-tab" data-panel="cache">💾 Cache</button>
+        <button class="nav-tab" data-panel="memory">🧠 Memory</button>
+      </nav>
     </header>
     <div id="layout">
       <aside id="upload-panel">
@@ -21,15 +27,71 @@
         </div>
         <ul id="file-list"></ul>
       </aside>
-      <main id="chat-panel">
-        <ul id="messages"></ul>
-        <div id="input-row">
-          <textarea
-            id="query-input"
-            placeholder="Ask a question… (Enter to send, Shift+Enter for newline)"
-            rows="2"
-          ></textarea>
-          <button id="send-btn">Send</button>
+      <main id="main-content">
+        <!-- F0: Chat Panel -->
+        <div id="chat-panel" class="panel active">
+          <ul id="messages"></ul>
+          <div id="input-row">
+            <textarea
+              id="query-input"
+              placeholder="Ask a question… (Enter to send, Shift+Enter for newline)"
+              rows="2"
+            ></textarea>
+            <button id="send-btn">Send</button>
+          </div>
+        </div>
+        
+        <!-- F5: Retrieval Debug Panel -->
+        <div id="retrieval-panel" class="panel">
+          <div class="panel-header">
+            <h2>Direct Retrieval Search</h2>
+            <p>Test the retrieval system without LLM processing</p>
+          </div>
+          <div class="panel-content">
+            <div class="search-box">
+              <input type="text" id="retrieval-query" placeholder="Enter search query..." />
+              <input type="number" id="retrieval-top-k" value="5" min="1" max="100" placeholder="top_k" />
+              <button id="retrieval-search-btn">Search</button>
+            </div>
+            <div id="retrieval-results"></div>
+          </div>
+        </div>
+        
+        <!-- F3: Cache Management Panel -->
+        <div id="cache-panel" class="panel">
+          <div class="panel-header">
+            <h2>Cache Management</h2>
+            <div class="cache-actions">
+              <button id="cache-refresh-stats">Refresh Stats</button>
+              <button id="cache-load-review">Load Pending</button>
+            </div>
+          </div>
+          <div class="panel-content">
+            <div id="cache-stats" class="stats-box"></div>
+            <div id="cache-review" class="review-list"></div>
+          </div>
+        </div>
+        
+        <!-- F4: Memory Management Panel -->
+        <div id="memory-panel" class="panel">
+          <div class="panel-header">
+            <h2>Memory Management</h2>
+            <div class="memory-actions">
+              <button id="memory-load-context">Load Context</button>
+              <button id="memory-summarize">Summarize</button>
+            </div>
+          </div>
+          <div class="panel-content">
+            <div id="memory-context" class="memory-box"></div>
+            <div class="static-facts-section">
+              <h3>Static Knowledge</h3>
+              <div class="add-fact-box">
+                <textarea id="memory-new-fact" placeholder="Add a new static fact..." rows="3"></textarea>
+                <button id="memory-add-fact">Add Fact</button>
+              </div>
+              <div id="memory-facts" class="facts-list"></div>
+            </div>
+          </div>
         </div>
       </main>
     </div>
