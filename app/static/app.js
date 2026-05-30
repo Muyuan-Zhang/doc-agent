@@ -234,44 +234,45 @@ async function sendMessage() {
 
   const { job_id: jobId } = await queryRes.json();
 
-  // 2. Stream the answer via SSE
+  // 2. Stream the answer via SSE (server sends named events: token / done / error / timeout)
   const es = new EventSource(`/agent/stream/${jobId}?session_id=${SESSION_ID}`);
   let answer = "";
+  let finished = false;
 
-  es.onmessage = (ev) => {
-    const data = ev.data;
+  function closeStream() {
+    finished = true;
+    es.close();
+  }
 
-    if (data === "[DONE]") {
-      es.close();
-      finalizeBubble(bubbleLi, answer);
-      enableInput();
-      saveTurn(query, answer);
-      return;
-    }
-
-    if (data.startsWith("[ERROR]")) {
-      es.close();
-      finalizeBubble(bubbleLi, data.replace("[ERROR] ", ""), true);
-      enableInput();
-      return;
-    }
-
-    if (data === "[TIMEOUT]") {
-      es.close();
-      finalizeBubble(bubbleLi, "⏱ Request timed out. Please try again.", true);
-      enableInput();
-      return;
-    }
-
-    // The answer arrives as a single chunk (not token-by-token)
-    answer = data;
+  es.addEventListener("token", (ev) => {
+    answer += ev.data;
     bubbleLi.querySelector(".cursor")?.remove();
     bubbleLi.textContent = answer;
     messages.scrollTop = messages.scrollHeight;
-  };
+  });
+
+  es.addEventListener("done", () => {
+    closeStream();
+    finalizeBubble(bubbleLi, answer);
+    enableInput();
+    saveTurn(query, answer);
+  });
+
+  es.addEventListener("error", (ev) => {
+    closeStream();
+    finalizeBubble(bubbleLi, ev.data || "Something went wrong. Please try again.", true);
+    enableInput();
+  });
+
+  es.addEventListener("timeout", () => {
+    closeStream();
+    finalizeBubble(bubbleLi, "⏱ Request timed out. Please try again.", true);
+    enableInput();
+  });
 
   es.onerror = () => {
-    es.close();
+    if (finished) return;
+    closeStream();
     if (!answer) {
       finalizeBubble(bubbleLi, "Connection error. Please try again.", true);
     } else {

@@ -83,19 +83,16 @@ class OpenAILLMClient(AbstractLLMClient):
     async def stream_complete(self, prompt: str, **kwargs) -> AsyncIterator[str]:
         max_tokens = kwargs.get("max_tokens", 512)
         async with self._interactive_sem:
-            stream = await self._client.chat.completions.create(
+            async with await self._client.chat.completions.create(
                 model=settings.openai_chat_model,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=max_tokens,
                 stream=True,
-            )
-            try:
+            ) as stream:
                 async for chunk in stream:
                     content = chunk.choices[0].delta.content
                     if content:
                         yield content
-            finally:
-                await stream.aclose()
 
     async def embed(self, text: str) -> list[float]:
         async with self._background_sem:

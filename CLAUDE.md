@@ -37,6 +37,9 @@
 | M5 分層記憶 | 近期對話 + 長期摘要 + 靜態知識向量化 | M0, M1 |
 | M6 一致性 | 知識庫更新 → Redis 緩存失效/重算 | M1, M3 |
 | M7 Skill 封裝 | 問答 / 工作總結封裝為可編排 Skill | M4 |
+| F0 前端界面 | Vanilla JS 對話頁面（文件上傳 + SSE 流式問答），FastAPI 直接托管 | M4 |
+| F1 SSE 流式輸出 | /agent/stream/{job_id} 後端實現，EventSourceResponse | M4 |
+| F2 工程化腳本 | Makefile + start.bat/stop.bat 一鍵啟停 | 無 |
 
 ## 測試規範
 - M0 覆蓋率 ≥ 90%，其他模塊 ≥ 80%
