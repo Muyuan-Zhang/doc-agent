@@ -73,13 +73,20 @@ class ReviewQueue:
             entry = await self._store.get(query_hash)
             if entry is None:
                 return CacheStatus.PENDING_REVIEW
+
+            # Already-approved entries (e.g. auto-approved): just clean up the
+            # pending queue and return the current status — no transition needed.
+            if entry.status == CacheStatus.APPROVED:
+                await self.remove_from_queue(query_hash)
+                return CacheStatus.APPROVED
+
             if reviewer_id in entry.approved_by:
                 return entry.status
             new_count = entry.approval_count + 1
             new_approved_by = entry.approved_by + [reviewer_id]
             if new_count >= self._cfg.cache_auto_approve_threshold:
                 new_status = CacheStatus.APPROVED
-                await self._remove_from_queue(query_hash)
+                await self.remove_from_queue(query_hash)
             else:
                 new_status = CacheStatus.PENDING_REVIEW
             await self._store.update_status_under_lock(
@@ -92,7 +99,7 @@ class ReviewQueue:
             await self._redis.release_lock(lock_key, token)
 
     async def reject(self, query_hash: str) -> None:
-        """Reject under lock to prevent APPROVED → REJECTED race."""
+        """Reject under lock. Already-APPROVED entries are just removed from queue."""
         lock_key = self._store._lock_key(query_hash)
         acquired, token = await self._redis.acquire_lock(lock_key, ttl_seconds=10)
         if not acquired:
@@ -102,13 +109,20 @@ class ReviewQueue:
             entry = await self._store.get(query_hash)
             if entry is None or entry.status == CacheStatus.REJECTED:
                 return
-            # validate_transition raises ValidationError for APPROVED → REJECTED
+
+            # Auto-approved entries are terminal — just clean up the queue.
+            if entry.status == CacheStatus.APPROVED:
+                await self.remove_from_queue(query_hash)
+                logger.info("review_queue=skipped_approved hash=%s", query_hash)
+                return
+
             validate_transition(entry.status, CacheStatus.REJECTED)
             await self._store.update_status_under_lock(query_hash, CacheStatus.REJECTED)
-            await self._remove_from_queue(query_hash)
+            await self.remove_from_queue(query_hash)
             logger.info("review_queue=rejected hash=%s", query_hash)
         finally:
             await self._redis.release_lock(lock_key, token)
 
-    async def _remove_from_queue(self, query_hash: str) -> None:
+    async def remove_from_queue(self, query_hash: str) -> None:
+        """Remove a hash from the pending sorted set (idempotent)."""
         await self._redis.client.zrem(self._pending_key(), query_hash)

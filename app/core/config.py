@@ -77,7 +77,7 @@ class Settings(BaseSettings):
     # Only applies when cache_auto_approve=True and value > 0.
     # Entries whose top-chunk embedding similarity is below this threshold
     # fall through to PENDING_REVIEW for manual inspection.
-    cache_quality_threshold: float = 0.0
+    cache_quality_threshold: float = 0.6
 
     # Redis Streams MQ
     mq_stream_name: str = "doc-agent:tasks"
