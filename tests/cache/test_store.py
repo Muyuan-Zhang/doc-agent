@@ -316,7 +316,7 @@ class TestRagCacheStoreStats:
         redis, inner = _make_redis()
         inner.pipeline = MagicMock(return_value=pipe)
         stats = await RagCacheStore(redis).get_stats()
-        assert stats == {"hits": 0, "misses": 0, "pending": 0}
+        assert stats == {"hits": 0, "misses": 0, "auto_approved": 0, "pending": 0}
 
     async def test_get_stats_uses_single_pipeline_round_trip(self):
         pipe = _make_pipeline({}, 0)

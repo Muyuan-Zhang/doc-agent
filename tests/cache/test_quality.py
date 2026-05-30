@@ -13,15 +13,8 @@ Covers:
 import math
 import pytest
 
+from app.cache.quality import compute_quality, cosine_similarity
 from app.models.chunk import ChunkSchema
-
-
-# Import the module under test — will fail (RED) until quality.py is created
-try:
-    from app.cache.quality import compute_quality, cosine_similarity
-except ImportError:
-    compute_quality = None  # type: ignore[assignment]
-    cosine_similarity = None  # type: ignore[assignment]
 
 
 def _make_chunk(content: str = "test", embedding: list[float] | None = None) -> ChunkSchema:

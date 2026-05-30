@@ -64,6 +64,7 @@ class ReviewEntry(BaseModel):
 class StatsResponse(BaseModel):
     hits: int
     misses: int
+    auto_approved: int = 0
     pending: int
 
 

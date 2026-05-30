@@ -143,5 +143,6 @@ class RagCacheStore:
         return {
             "hits": int(raw_stats.get("hits", 0)),
             "misses": int(raw_stats.get("misses", 0)),
+            "auto_approved": int(raw_stats.get("auto_approved", 0)),
             "pending": int(pending),
         }

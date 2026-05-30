@@ -59,7 +59,7 @@ class RagCacheService:
         chunks = await retriever.retrieve(query, top_k)
 
         if entry is None:
-            status = await self._decide_status(query, chunks)
+            status = await self._decide_status(normalized, chunks)
             new_entry = CacheEntry(
                 query_hash=query_hash,
                 original_query=query,
@@ -71,6 +71,8 @@ class RagCacheService:
             await self._store.set(new_entry, self._cfg.cache_ttl_seconds)
             if status == CacheStatus.PENDING_REVIEW:
                 await self._review.enqueue(query_hash)
+            elif status == CacheStatus.APPROVED:
+                await self._inc_stat("auto_approved")
 
         return chunks, False
 
@@ -87,6 +89,10 @@ class RagCacheService:
         if not self._cfg.cache_auto_approve:
             return CacheStatus.PENDING_REVIEW
 
+        if not chunks:
+            logger.info("cache=empty_chunks — PENDING_REVIEW")
+            return CacheStatus.PENDING_REVIEW
+
         threshold = self._cfg.cache_quality_threshold
         if threshold <= 0.0:
             return CacheStatus.APPROVED
@@ -100,10 +106,18 @@ class RagCacheService:
             )
             return CacheStatus.PENDING_REVIEW
 
-        score = compute_quality(query_embedding, chunks)
+        try:
+            score = compute_quality(query_embedding, chunks)
+        except Exception as exc:
+            logger.warning(
+                "cache=quality_failed query=%s error=%s — falling back to PENDING_REVIEW",
+                query[:80], exc,
+            )
+            return CacheStatus.PENDING_REVIEW
+
         if score >= threshold:
             logger.info(
-                "cache=auto_approved hash_zone score=%.4f threshold=%.2f",
+                "cache=auto_approved score=%.4f threshold=%.2f",
                 score, threshold,
             )
             return CacheStatus.APPROVED
