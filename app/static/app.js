@@ -47,10 +47,17 @@ function renderFileItem(name) {
   badge.className = "badge badge-ingesting";
   badge.textContent = "ingesting";
 
+  const deleteBtn = document.createElement("button");
+  deleteBtn.type = "button";
+  deleteBtn.className = "delete-btn";
+  deleteBtn.textContent = "×";
+  deleteBtn.title = "Remove document";
+
   li.appendChild(nameSpan);
   li.appendChild(badge);
+  li.appendChild(deleteBtn);
   fileList.appendChild(li);
-  return badge;
+  return { badge, li, deleteBtn };
 }
 
 function updateBadge(badge, status) {
@@ -58,11 +65,29 @@ function updateBadge(badge, status) {
   badge.textContent = status;
 }
 
+async function deleteDocument(docId, li, deleteBtn) {
+  deleteBtn.disabled = true;
+  try {
+    const res = await fetch(`/knowledge-base/documents/${docId}`, { method: "DELETE" });
+    if (res.status === 204 || res.ok) {
+      uploadedFiles.delete(docId);
+      li.remove();
+    } else {
+      showToast(`Delete failed (${res.status})`);
+      deleteBtn.disabled = false;
+    }
+  } catch (err) {
+    showToast("Delete error: " + err.message);
+    deleteBtn.disabled = false;
+  }
+}
+
 // Backend writes "indexed" on success, "failed" on error (DocumentStatus literal).
 // Cap at 150 attempts (~5 min at 2 s each) to avoid an infinite loop on stuck jobs.
 async function pollDocStatus(docId, badge, maxAttempts = 150) {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     await new Promise(r => setTimeout(r, 2000));
+    if (!uploadedFiles.has(docId)) return;  // document was deleted during polling
     try {
       const res = await fetch(`/knowledge-base/documents/${docId}/status`);
       if (!res.ok) {
@@ -93,7 +118,7 @@ async function pollDocStatus(docId, badge, maxAttempts = 150) {
 }
 
 async function uploadFile(file) {
-  const badge = renderFileItem(file.name);
+  const { badge, li, deleteBtn } = renderFileItem(file.name);
   const form = new FormData();
   form.append("file", file);
 
@@ -101,14 +126,17 @@ async function uploadFile(file) {
     const res = await fetch("/knowledge-base/documents", { method: "POST", body: form });
     if (!res.ok) {
       updateBadge(badge, "error");
+      deleteBtn.onclick = () => li.remove();
       showToast(`Upload failed (${res.status}): ${res.statusText}`);
       return;
     }
     const { doc_id: docId } = await res.json();
     uploadedFiles.set(docId, { name: file.name, status: "ingesting" });
+    deleteBtn.onclick = () => deleteDocument(docId, li, deleteBtn);
     pollDocStatus(docId, badge);
   } catch (err) {
     updateBadge(badge, "error");
+    deleteBtn.onclick = () => li.remove();
     showToast("Upload error: " + err.message);
   }
 }
