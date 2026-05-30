@@ -70,6 +70,14 @@ class Settings(BaseSettings):
     cache_rewrite_enabled: bool = True
     cache_max_pending_reviews: int = 100
     cache_api_key: str = ""  # required for approve/reject/delete; empty disables auth
+    # When True, new cache entries are auto-approved without human review.
+    # When False, every entry requires manual approval (current strict behavior).
+    cache_auto_approve: bool = True
+    # Cosine-similarity threshold for quality-gated auto-approval (0.0 = approve all).
+    # Only applies when cache_auto_approve=True and value > 0.
+    # Entries whose top-chunk embedding similarity is below this threshold
+    # fall through to PENDING_REVIEW for manual inspection.
+    cache_quality_threshold: float = 0.0
 
     # Redis Streams MQ
     mq_stream_name: str = "doc-agent:tasks"

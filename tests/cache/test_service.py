@@ -3,8 +3,10 @@ Tests for app/cache/service.py — RagCacheService.
 
 Covers:
 - APPROVED hit: returns cached chunks, skips retriever, increments hit stat (HINCRBY)
+- Auto-approve (default): new entries stored as APPROVED, skip review queue
 - PENDING/REJECTED hit: runs retriever, no cache write, no re-enqueue
-- MISS: runs retriever, stores PENDING_REVIEW, enqueues via Lua eval
+- MISS (strict mode): runs retriever, stores PENDING_REVIEW, enqueues via Lua eval
+- Quality threshold: auto-approves above threshold, pending below
 - Stat resilience: HINCRBY failure must not propagate
 """
 import pytest
@@ -45,6 +47,7 @@ def _make_redis() -> tuple[RedisClient, MagicMock]:
 def _make_llm() -> MagicMock:
     m = MagicMock()
     m.complete = AsyncMock(return_value="normalized query")
+    m.embed = AsyncMock(return_value=[0.1] * 10)
     return m
 
 
@@ -54,6 +57,8 @@ def _make_cfg(**overrides) -> Settings:
         cache_ttl_seconds=overrides.get("cache_ttl_seconds", 3600),
         cache_auto_approve_threshold=overrides.get("cache_auto_approve_threshold", 1),
         cache_max_pending_reviews=overrides.get("cache_max_pending_reviews", 100),
+        cache_auto_approve=overrides.get("cache_auto_approve", True),
+        cache_quality_threshold=overrides.get("cache_quality_threshold", 0.0),
     )
 
 
@@ -130,10 +135,13 @@ class TestRagCacheServiceApprovedHit:
 # ---------------------------------------------------------------------------
 
 class TestRagCacheServiceMiss:
+    """MISS tests with cache_auto_approve=False (strict/manual-review mode)."""
+
     async def test_runs_retriever_on_miss(self):
         redis, inner = _make_redis()
+        cfg = _make_cfg(cache_auto_approve=False)
         retriever = _make_retriever()
-        chunks, hit = await RagCacheService(redis, _make_llm(), _make_cfg()).get_or_retrieve(
+        chunks, hit = await RagCacheService(redis, _make_llm(), cfg).get_or_retrieve(
             "test query", retriever
         )
         assert hit is False
@@ -141,7 +149,8 @@ class TestRagCacheServiceMiss:
 
     async def test_stores_new_entry_as_pending_review(self):
         redis, inner = _make_redis()
-        await RagCacheService(redis, _make_llm(), _make_cfg()).get_or_retrieve(
+        cfg = _make_cfg(cache_auto_approve=False)
+        await RagCacheService(redis, _make_llm(), cfg).get_or_retrieve(
             "test query", _make_retriever()
         )
         inner.setex.assert_awaited_once()
@@ -150,29 +159,33 @@ class TestRagCacheServiceMiss:
 
     async def test_enqueues_for_review_via_eval(self):
         redis, inner = _make_redis()
-        await RagCacheService(redis, _make_llm(), _make_cfg()).get_or_retrieve(
+        cfg = _make_cfg(cache_auto_approve=False)
+        await RagCacheService(redis, _make_llm(), cfg).get_or_retrieve(
             "test query", _make_retriever()
         )
         inner.eval.assert_awaited_once()  # Lua enqueue script
 
     async def test_returns_retriever_chunks_on_miss(self):
         redis, inner = _make_redis()
+        cfg = _make_cfg(cache_auto_approve=False)
         retrieved = [_make_chunk("retrieved text")]
-        chunks, _ = await RagCacheService(redis, _make_llm(), _make_cfg()).get_or_retrieve(
+        chunks, _ = await RagCacheService(redis, _make_llm(), cfg).get_or_retrieve(
             "test query", _make_retriever(retrieved)
         )
         assert chunks[0].content == "retrieved text"
 
     async def test_increments_miss_stat_via_hincrby(self):
         redis, inner = _make_redis()
-        await RagCacheService(redis, _make_llm(), _make_cfg()).get_or_retrieve(
+        cfg = _make_cfg(cache_auto_approve=False)
+        await RagCacheService(redis, _make_llm(), cfg).get_or_retrieve(
             "test query", _make_retriever()
         )
         inner.hincrby.assert_awaited_once()
 
     async def test_stored_entry_contains_original_query(self):
         redis, inner = _make_redis()
-        await RagCacheService(redis, _make_llm(), _make_cfg()).get_or_retrieve(
+        cfg = _make_cfg(cache_auto_approve=False)
+        await RagCacheService(redis, _make_llm(), cfg).get_or_retrieve(
             "What is the deadline?", _make_retriever()
         )
         stored = CacheEntry.model_validate_json(inner.setex.call_args.args[2])
@@ -180,7 +193,8 @@ class TestRagCacheServiceMiss:
 
     async def test_uses_configured_ttl_for_storage(self):
         redis, inner = _make_redis()
-        await RagCacheService(redis, _make_llm(), _make_cfg(cache_ttl_seconds=1800)).get_or_retrieve(
+        cfg = _make_cfg(cache_auto_approve=False, cache_ttl_seconds=1800)
+        await RagCacheService(redis, _make_llm(), cfg).get_or_retrieve(
             "test", _make_retriever()
         )
         assert inner.setex.call_args.args[1] == 1800
@@ -250,6 +264,114 @@ class TestRagCacheServiceRejectedBypass:
             "test query", _make_retriever()
         )
         inner.setex.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Auto-approve (default: cache_auto_approve=True, threshold=0)
+# ---------------------------------------------------------------------------
+
+class TestRagCacheServiceAutoApprove:
+    async def test_stores_new_entry_as_approved_by_default(self):
+        redis, inner = _make_redis()
+        cfg = _make_cfg()  # cache_auto_approve=True, threshold=0 by default
+        await RagCacheService(redis, _make_llm(), cfg).get_or_retrieve(
+            "test query", _make_retriever()
+        )
+        inner.setex.assert_awaited_once()
+        stored = CacheEntry.model_validate_json(inner.setex.call_args.args[2])
+        assert stored.status == CacheStatus.APPROVED
+
+    async def test_does_not_enqueue_review_when_auto_approved(self):
+        redis, inner = _make_redis()
+        cfg = _make_cfg()
+        await RagCacheService(redis, _make_llm(), cfg).get_or_retrieve(
+            "test query", _make_retriever()
+        )
+        inner.eval.assert_not_awaited()  # No Lua enqueue
+
+    async def test_auto_approved_entry_is_served_on_next_call(self):
+        redis, inner = _make_redis()
+        cfg = _make_cfg()
+        # First call: miss, store as APPROVED
+        inner.get = AsyncMock(return_value=None)  # first miss
+        retriever = _make_retriever()
+        chunks1, hit1 = await RagCacheService(redis, _make_llm(), cfg).get_or_retrieve(
+            "test query", retriever
+        )
+        assert hit1 is False
+
+        # Second call: should be APPROVED hit
+        stored_json = inner.setex.call_args.args[2]
+        inner.get = AsyncMock(return_value=stored_json)
+        chunks2, hit2 = await RagCacheService(redis, _make_llm(), cfg).get_or_retrieve(
+            "test query", retriever
+        )
+        assert hit2 is True
+        # Retriever only called once (first miss)
+        assert retriever.retrieve.await_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Quality threshold auto-approval
+# ---------------------------------------------------------------------------
+
+class TestRagCacheServiceQualityThreshold:
+    async def test_approves_when_quality_above_threshold(self):
+        redis, inner = _make_redis()
+        llm = _make_llm()
+        # Embedding that will have high similarity with chunk
+        llm.embed = AsyncMock(return_value=[1.0, 0.0])
+        cfg = _make_cfg(cache_quality_threshold=0.7)
+        chunk = _make_chunk("relevant content")
+        chunk = chunk.model_copy(update={"embedding": [1.0, 0.0]})
+        retriever = _make_retriever([chunk])
+
+        await RagCacheService(redis, llm, cfg).get_or_retrieve(
+            "test query", retriever
+        )
+        stored = CacheEntry.model_validate_json(inner.setex.call_args.args[2])
+        assert stored.status == CacheStatus.APPROVED
+
+    async def test_pending_when_quality_below_threshold(self):
+        redis, inner = _make_redis()
+        llm = _make_llm()
+        llm.embed = AsyncMock(return_value=[1.0, 0.0])
+        cfg = _make_cfg(cache_quality_threshold=0.9)
+        chunk = _make_chunk("irrelevant")
+        chunk = chunk.model_copy(update={"embedding": [0.0, 1.0]})  # orthogonal → sim 0.0
+        retriever = _make_retriever([chunk])
+
+        await RagCacheService(redis, llm, cfg).get_or_retrieve(
+            "test query", retriever
+        )
+        stored = CacheEntry.model_validate_json(inner.setex.call_args.args[2])
+        assert stored.status == CacheStatus.PENDING_REVIEW
+
+    async def test_embed_failure_falls_back_to_pending(self):
+        redis, inner = _make_redis()
+        llm = _make_llm()
+        llm.embed = AsyncMock(side_effect=RuntimeError("API down"))
+        cfg = _make_cfg(cache_quality_threshold=0.7)
+
+        await RagCacheService(redis, llm, cfg).get_or_retrieve(
+            "test query", _make_retriever()
+        )
+        stored = CacheEntry.model_validate_json(inner.setex.call_args.args[2])
+        assert stored.status == CacheStatus.PENDING_REVIEW
+
+    async def test_no_chunk_embeddings_falls_back_to_pending(self):
+        redis, inner = _make_redis()
+        llm = _make_llm()
+        llm.embed = AsyncMock(return_value=[1.0, 0.0, 0.0])
+        cfg = _make_cfg(cache_quality_threshold=0.7)
+        chunks = [_make_chunk("no embedding")]  # embedding=None by default
+        retriever = _make_retriever(chunks)
+
+        await RagCacheService(redis, llm, cfg).get_or_retrieve(
+            "test query", retriever
+        )
+        stored = CacheEntry.model_validate_json(inner.setex.call_args.args[2])
+        assert stored.status == CacheStatus.PENDING_REVIEW
 
 
 # ---------------------------------------------------------------------------
