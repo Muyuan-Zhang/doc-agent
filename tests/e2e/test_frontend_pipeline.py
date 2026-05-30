@@ -6,6 +6,7 @@ Covers:
     on every response (static, API, 404)
   - QueryRequest.session_id pattern validation rejects invalid inputs
   - Valid SESSION_ID (UUID) flows through query → job_id → stream
+  - DELETE /knowledge-base/documents/{doc_id} returns 204 and security headers
 
 No real infrastructure — state is injected into app after create_app().
 """
@@ -13,7 +14,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 from httpx import ASGITransport, AsyncClient
 
-from tests.e2e.conftest import make_app, make_redis_mock
+from tests.e2e.conftest import make_app, make_pg_mock, make_redis_mock
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -235,3 +236,41 @@ class TestCSPAllowsSelfHostedAssets:
             resp = await c.get("/")
         csp = resp.headers["content-security-policy"]
         assert "connect-src 'self'" in csp
+
+
+# ── DELETE /knowledge-base/documents/{doc_id} ────────────────────────────────
+
+class TestDeleteDocument:
+    """DELETE /knowledge-base/documents/{doc_id} returns 204 and security headers."""
+
+    _DOC_UUID = "550e8400-e29b-41d4-a716-446655440000"
+
+    def _make_app_with_doc(self):
+        pg = make_pg_mock(
+            fetchone=(self._DOC_UUID, "report.pdf", "indexed", 5, "v1")
+        )
+        return make_app(postgres=pg, mq=_make_mq_mock())
+
+    async def test_delete_returns_204(self):
+        app = self._make_app_with_doc()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.delete(f"/knowledge-base/documents/{self._DOC_UUID}")
+        assert resp.status_code == 204
+
+    async def test_delete_has_security_headers(self):
+        app = self._make_app_with_doc()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.delete(f"/knowledge-base/documents/{self._DOC_UUID}")
+        _assert_security_headers(resp.headers)
+
+    async def test_delete_returns_404_when_doc_not_found(self):
+        app = make_app(mq=_make_mq_mock())  # pg fetchone defaults to None → NotFoundError
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.delete(f"/knowledge-base/documents/{self._DOC_UUID}")
+        assert resp.status_code == 404
+
+    async def test_delete_returns_422_for_invalid_uuid(self):
+        app = make_app()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.delete("/knowledge-base/documents/not-a-uuid")
+        assert resp.status_code == 422

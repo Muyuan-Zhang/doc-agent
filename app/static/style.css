@@ -123,6 +123,20 @@ header h1 {
 .badge-ready     { background: #d4edda; color: #155724; }
 .badge-error     { background: #f8d7da; color: #721c24; }
 
+.delete-btn {
+  background: none;
+  border: none;
+  color: #ccc;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 2px;
+  flex-shrink: 0;
+  transition: color 0.15s;
+}
+.delete-btn:hover:not(:disabled) { color: #e55; }
+.delete-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
 /* ── Chat panel ── */
 #chat-panel {
   flex: 1;
