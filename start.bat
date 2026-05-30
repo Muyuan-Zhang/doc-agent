@@ -27,14 +27,7 @@ if not exist logs mkdir logs
 
 :: ── 4. Start uvicorn in background, capture PID via PowerShell ───────────────
 echo Starting uvicorn...
-powershell -NoProfile -Command ^
-    "$proc = Start-Process -FilePath python ^
-        -ArgumentList @('-m','uvicorn','main:app','--host','0.0.0.0','--port','8000','--reload') ^
-        -RedirectStandardOutput 'logs\uvicorn.log' ^
-        -RedirectStandardError  'logs\uvicorn_err.log' ^
-        -WindowStyle Hidden ^
-        -PassThru; ^
-    $proc.Id | Set-Content -Path '.uvicorn.pid' -NoNewline"
+powershell -NoProfile -Command "$proc = Start-Process -FilePath 'python' -ArgumentList @('-m','uvicorn','main:app','--host','0.0.0.0','--port','8000','--reload') -RedirectStandardOutput 'logs\uvicorn.log' -RedirectStandardError 'logs\uvicorn_err.log' -WindowStyle Hidden -PassThru; $proc.Id | Set-Content -Path '.uvicorn.pid' -NoNewline"
 
 if %ERRORLEVEL% neq 0 (
     echo ERROR: Failed to start uvicorn.
