@@ -5,11 +5,12 @@ Exercises the full middleware → router → service stack with mocked Redis.
 """
 import pytest
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from httpx import ASGITransport, AsyncClient
 
 from app.cache.schemas import CacheEntry, CacheStatus
+from app.core.config import settings as _settings
 from app.models.chunk import ChunkSchema
 from tests.e2e.conftest import make_app, make_llm_mock, make_cache_redis_mock
 
@@ -264,3 +265,165 @@ class TestCachePipeline:
             r = await c.post(f"/cache/review/{entry.query_hash}/reject")
         assert r.status_code == 204
         redis.client.setex.assert_awaited()
+
+
+# ---------------------------------------------------------------------------
+# X-API-Key authentication requirements
+# ---------------------------------------------------------------------------
+
+_TEST_KEY = "test-secret"
+
+
+def _key_patch():
+    """Patch settings so cache_api_key is non-empty, enabling auth checks."""
+    return patch.object(_settings, "cache_api_key", _TEST_KEY)
+
+
+class TestCacheAuthRequirements:
+    """When cache_api_key is configured, every endpoint must enforce X-API-Key.
+
+    GET /stats and GET /review are the RED cases: they have no auth dependency
+    yet. The write endpoints (approve/reject/delete) already enforce auth but
+    have no tests covering the 401 paths.
+    """
+
+    # ---- GET /cache/stats ----
+
+    async def test_stats_rejects_missing_key(self):
+        redis = make_cache_redis_mock()
+        redis.client.pipeline = MagicMock(return_value=_make_stats_pipeline())
+        app = make_app(redis=redis, llm=make_llm_mock())
+        with _key_patch():
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+                r = await c.get("/cache/stats")
+        assert r.status_code == 401
+
+    async def test_stats_rejects_wrong_key(self):
+        redis = make_cache_redis_mock()
+        redis.client.pipeline = MagicMock(return_value=_make_stats_pipeline())
+        app = make_app(redis=redis, llm=make_llm_mock())
+        with _key_patch():
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+                r = await c.get("/cache/stats", headers={"X-API-Key": "wrong"})
+        assert r.status_code == 401
+
+    async def test_stats_accepts_correct_key(self):
+        redis = make_cache_redis_mock()
+        redis.client.pipeline = MagicMock(return_value=_make_stats_pipeline(1, 2, 0))
+        app = make_app(redis=redis, llm=make_llm_mock())
+        with _key_patch():
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+                r = await c.get("/cache/stats", headers={"X-API-Key": _TEST_KEY})
+        assert r.status_code == 200
+
+    # ---- GET /cache/review ----
+
+    async def test_review_rejects_missing_key(self):
+        redis = make_cache_redis_mock()
+        redis.client.zrange = AsyncMock(return_value=[])
+        app = make_app(redis=redis, llm=make_llm_mock())
+        with _key_patch():
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+                r = await c.get("/cache/review")
+        assert r.status_code == 401
+
+    async def test_review_rejects_wrong_key(self):
+        redis = make_cache_redis_mock()
+        redis.client.zrange = AsyncMock(return_value=[])
+        app = make_app(redis=redis, llm=make_llm_mock())
+        with _key_patch():
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+                r = await c.get("/cache/review", headers={"X-API-Key": "wrong"})
+        assert r.status_code == 401
+
+    async def test_review_accepts_correct_key(self):
+        redis = make_cache_redis_mock()
+        redis.client.zrange = AsyncMock(return_value=[])
+        app = make_app(redis=redis, llm=make_llm_mock())
+        with _key_patch():
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+                r = await c.get("/cache/review", headers={"X-API-Key": _TEST_KEY})
+        assert r.status_code == 200
+
+    # ---- POST /cache/review/{hash}/approve ----
+
+    async def test_approve_rejects_missing_key(self):
+        entry = _make_cache_entry()
+        redis = make_cache_redis_mock(entry=entry)
+        app = make_app(redis=redis, llm=make_llm_mock())
+        with _key_patch():
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+                r = await c.post(
+                    f"/cache/review/{entry.query_hash}/approve",
+                    json={"reviewer_id": "admin-1"},
+                )
+        assert r.status_code == 401
+
+    async def test_approve_rejects_wrong_key(self):
+        entry = _make_cache_entry()
+        redis = make_cache_redis_mock(entry=entry)
+        app = make_app(redis=redis, llm=make_llm_mock())
+        with _key_patch():
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+                r = await c.post(
+                    f"/cache/review/{entry.query_hash}/approve",
+                    json={"reviewer_id": "admin-1"},
+                    headers={"X-API-Key": "wrong"},
+                )
+        assert r.status_code == 401
+
+    async def test_approve_accepts_correct_key(self):
+        entry = _make_cache_entry()
+        redis = make_cache_redis_mock(entry=entry)
+        app = make_app(redis=redis, llm=make_llm_mock())
+        with _key_patch():
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+                r = await c.post(
+                    f"/cache/review/{entry.query_hash}/approve",
+                    json={"reviewer_id": "admin-1"},
+                    headers={"X-API-Key": _TEST_KEY},
+                )
+        assert r.status_code == 200
+
+    # ---- POST /cache/review/{hash}/reject ----
+
+    async def test_reject_rejects_missing_key(self):
+        entry = _make_cache_entry()
+        redis = make_cache_redis_mock(entry=entry)
+        app = make_app(redis=redis, llm=make_llm_mock())
+        with _key_patch():
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+                r = await c.post(f"/cache/review/{entry.query_hash}/reject")
+        assert r.status_code == 401
+
+    async def test_reject_accepts_correct_key(self):
+        entry = _make_cache_entry()
+        redis = make_cache_redis_mock(entry=entry)
+        app = make_app(redis=redis, llm=make_llm_mock())
+        with _key_patch():
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+                r = await c.post(
+                    f"/cache/review/{entry.query_hash}/reject",
+                    headers={"X-API-Key": _TEST_KEY},
+                )
+        assert r.status_code == 204
+
+    # ---- DELETE /cache/{hash} ----
+
+    async def test_delete_rejects_missing_key(self):
+        redis = make_cache_redis_mock()
+        redis.client.delete = AsyncMock(return_value=1)
+        app = make_app(redis=redis, llm=make_llm_mock())
+        with _key_patch():
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+                r = await c.delete("/cache/0123456789abcdef")
+        assert r.status_code == 401
+
+    async def test_delete_accepts_correct_key(self):
+        redis = make_cache_redis_mock()
+        redis.client.delete = AsyncMock(return_value=1)
+        app = make_app(redis=redis, llm=make_llm_mock())
+        with _key_patch():
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+                r = await c.delete("/cache/0123456789abcdef", headers={"X-API-Key": _TEST_KEY})
+        assert r.status_code == 204
