@@ -1,10 +1,6 @@
 import logging
-from typing import Literal, Optional
+from typing import Literal
 
-
-from fastapi import APIRouter, HTTPException, Query, Request, status
-
-from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Path as PathParam, Query, Request, status
 from pydantic import BaseModel, Field
 
@@ -55,18 +51,18 @@ async def append_turn(body: AppendTurnRequest, request: Request) -> None:
 
 @router.get("/context/{session_id}", response_model=MemoryContext)
 async def get_context(
+    request: Request,
     session_id: str = PathParam(..., pattern=_SAFE_ID_PATTERN),
     user_id: str = Query(..., pattern=_SAFE_ID_PATTERN),
-    request: Request = None,
 ) -> MemoryContext:
     return await _svc(request).retrieve_context(session_id, user_id)
 
 
 @router.post("/summarize/{session_id}", response_model=MemorySummary, dependencies=[Depends(_summarize_rate_limit)])
 async def summarize_session(
+    request: Request,
     session_id: str = PathParam(..., pattern=_SAFE_ID_PATTERN),
     user_id: str = Query(..., pattern=_SAFE_ID_PATTERN),
-    request: Request = None,
 ) -> MemorySummary:
     try:
         return await _svc(request).summarize_session(session_id, user_id)
@@ -87,8 +83,8 @@ async def add_static_fact(body: AddFactRequest, request: Request) -> StaticFact:
 
 @router.delete("/static/{fact_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_static_fact(
+    request: Request,
     fact_id: str = PathParam(..., pattern=_UUID_PATTERN),
     user_id: str = Query(..., pattern=_SAFE_ID_PATTERN),
-    request: Request = None,
 ) -> None:
     await _svc(request).delete_static_fact(fact_id, user_id)

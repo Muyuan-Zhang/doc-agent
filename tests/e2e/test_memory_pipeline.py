@@ -350,7 +350,8 @@ class TestMemoryRateLimiting:
                 "session_id": "s1", "user_id": "u1", "role": "user", "content": "hi",
             })
         assert r.status_code == 429
-        assert "Rate limit exceeded" in r.json()["detail"]
+        # RateLimitMiddleware (IP-based, fires before route dependency) returns AppError envelope.
+        assert r.json()["error"]["code"] == "RATE_LIMITED"
 
     async def test_summarize_returns_429_when_rate_limit_exceeded(self):
         from unittest.mock import AsyncMock
