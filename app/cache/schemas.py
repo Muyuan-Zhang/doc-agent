@@ -59,3 +59,31 @@ class ReviewEntry(BaseModel):
     approval_count: int
     created_at: datetime
     approved_by: list[str] = Field(default_factory=list)
+
+
+class StatsResponse(BaseModel):
+    hits: int
+    misses: int
+    pending: int
+
+
+class ReviewSummary(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    query_hash: str
+    original_query: str
+    normalized_query: str
+    chunk_count: int
+    status: CacheStatus
+    approval_count: int
+    created_at: datetime
+
+
+class ReviewListResponse(BaseModel):
+    pending: list[ReviewSummary]
+    total: int
+
+
+class ApproveResponse(BaseModel):
+    query_hash: str
+    status: CacheStatus
