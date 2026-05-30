@@ -20,13 +20,14 @@ class TestBuildGraph:
         redis = MagicMock()
         redis.cache_key = MagicMock(return_value="v1:rag:key")
         redis.client = MagicMock()
+        cache_svc = MagicMock()
 
-        graph = build_graph(llm=llm, retriever=retriever, redis=redis)
+        graph = build_graph(llm=llm, retriever=retriever, redis=redis, cache_svc=cache_svc)
 
         assert graph is not None
 
     def test_graph_has_six_nodes(self):
-        graph = build_graph(llm=MagicMock(), retriever=MagicMock(), redis=MagicMock())
+        graph = build_graph(llm=MagicMock(), retriever=MagicMock(), redis=MagicMock(), cache_svc=MagicMock())
         node_names = set(graph.get_graph().nodes.keys())
         expected = {"query_rewrite", "retrieval", "entity_extraction", "rerank", "generate", "cache_write"}
         assert expected.issubset(node_names)
@@ -48,8 +49,10 @@ class TestBuildGraph:
         inner.setex = AsyncMock()
         inner.rpush = AsyncMock()
         redis.client = inner
+        cache_svc = MagicMock()
+        cache_svc.get_or_retrieve = AsyncMock(return_value=([chunk], False))
 
-        graph = build_graph(llm=llm, retriever=retriever, redis=redis)
+        graph = build_graph(llm=llm, retriever=retriever, redis=redis, cache_svc=cache_svc)
         result = await graph.ainvoke({
             "session_id": "sess1",
             "job_id": "j1",
@@ -59,10 +62,11 @@ class TestBuildGraph:
             "chunks": [],
             "reranked_chunks": [],
             "answer": "",
+            "cache_hit": False,
             "error": None,
         })
 
         assert result["answer"] == "A great answer."
-        retriever.retrieve.assert_awaited_once()
+        cache_svc.get_or_retrieve.assert_awaited_once()
         inner.setex.assert_awaited_once()
         inner.rpush.assert_awaited_once()

@@ -39,6 +39,7 @@ def _state(**overrides) -> dict:
         chunks=[],
         reranked_chunks=[],
         answer="",
+        cache_hit=False,
         error=None,
     )
     return {**base, **overrides}
@@ -54,7 +55,7 @@ class TestQueryRewrite:
         llm.complete = AsyncMock(return_value="optimized fastapi introduction")
         state = _state()
 
-        result = await query_rewrite(state, llm=llm, retriever=None, redis=None)
+        result = await query_rewrite(state, llm=llm, retriever=None, redis=None, cache_svc=None)
 
         assert result["rewritten_query"] == "optimized fastapi introduction"
         llm.complete.assert_awaited_once()
@@ -64,7 +65,7 @@ class TestQueryRewrite:
         llm.complete = AsyncMock(return_value="")
         state = _state(query="what is python?")
 
-        result = await query_rewrite(state, llm=llm, retriever=None, redis=None)
+        result = await query_rewrite(state, llm=llm, retriever=None, redis=None, cache_svc=None)
 
         assert result["rewritten_query"] == "what is python?"
 
@@ -73,7 +74,7 @@ class TestQueryRewrite:
         llm.complete = AsyncMock(return_value="   ")
         state = _state(query="explain async")
 
-        result = await query_rewrite(state, llm=llm, retriever=None, redis=None)
+        result = await query_rewrite(state, llm=llm, retriever=None, redis=None, cache_svc=None)
 
         assert result["rewritten_query"] == "explain async"
 
@@ -83,34 +84,49 @@ class TestQueryRewrite:
 # ---------------------------------------------------------------------------
 
 class TestRetrieval:
-    async def test_fills_chunks_from_retriever(self):
+    async def test_fills_chunks_from_cache_svc(self):
         chunk = _chunk()
+        cache_svc = MagicMock()
+        cache_svc.get_or_retrieve = AsyncMock(return_value=([chunk], False))
         retriever = MagicMock()
-        retriever.retrieve = AsyncMock(return_value=[chunk])
         state = _state(rewritten_query="fastapi intro", top_k=3)
 
-        result = await retrieval(state, llm=None, retriever=retriever, redis=None)
+        result = await retrieval(state, llm=None, retriever=retriever, redis=None, cache_svc=cache_svc)
 
         assert result["chunks"] == [chunk]
-        retriever.retrieve.assert_awaited_once_with("fastapi intro", top_k=3)
+        assert result["cache_hit"] is False
+        cache_svc.get_or_retrieve.assert_awaited_once_with("fastapi intro", retriever, top_k=3)
 
-    async def test_returns_empty_list_when_retriever_finds_nothing(self):
+    async def test_returns_empty_list_when_nothing_found(self):
+        cache_svc = MagicMock()
+        cache_svc.get_or_retrieve = AsyncMock(return_value=([], False))
         retriever = MagicMock()
-        retriever.retrieve = AsyncMock(return_value=[])
         state = _state(rewritten_query="obscure topic")
 
-        result = await retrieval(state, llm=None, retriever=retriever, redis=None)
+        result = await retrieval(state, llm=None, retriever=retriever, redis=None, cache_svc=cache_svc)
 
         assert result["chunks"] == []
 
     async def test_uses_rewritten_query_not_original(self):
+        cache_svc = MagicMock()
+        cache_svc.get_or_retrieve = AsyncMock(return_value=([], False))
         retriever = MagicMock()
-        retriever.retrieve = AsyncMock(return_value=[])
         state = _state(query="original query", rewritten_query="better query")
 
-        await retrieval(state, llm=None, retriever=retriever, redis=None)
+        await retrieval(state, llm=None, retriever=retriever, redis=None, cache_svc=cache_svc)
 
-        retriever.retrieve.assert_awaited_once_with("better query", top_k=5)
+        cache_svc.get_or_retrieve.assert_awaited_once_with("better query", retriever, top_k=5)
+
+    async def test_cache_hit_flag_is_true_on_hit(self):
+        chunk = _chunk()
+        cache_svc = MagicMock()
+        cache_svc.get_or_retrieve = AsyncMock(return_value=([chunk], True))
+        retriever = MagicMock()
+        state = _state(rewritten_query="cached query")
+
+        result = await retrieval(state, llm=None, retriever=retriever, redis=None, cache_svc=cache_svc)
+
+        assert result["cache_hit"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -122,14 +138,14 @@ class TestEntityExtraction:
         chunk = _chunk()
         state = _state(chunks=[chunk])
 
-        result = await entity_extraction(state, llm=None, retriever=None, redis=None)
+        result = await entity_extraction(state, llm=None, retriever=None, redis=None, cache_svc=None)
 
         assert result["reranked_chunks"] == [chunk]
 
     async def test_empty_chunks_yields_empty_reranked(self):
         state = _state(chunks=[])
 
-        result = await entity_extraction(state, llm=None, retriever=None, redis=None)
+        result = await entity_extraction(state, llm=None, retriever=None, redis=None, cache_svc=None)
 
         assert result["reranked_chunks"] == []
 
@@ -144,7 +160,7 @@ class TestRerank:
         llm.complete = AsyncMock()
         state = _state(reranked_chunks=[])
 
-        result = await rerank(state, llm=llm, retriever=None, redis=None)
+        result = await rerank(state, llm=llm, retriever=None, redis=None, cache_svc=None)
 
         assert result["reranked_chunks"] == []
         llm.complete.assert_not_awaited()
@@ -156,7 +172,7 @@ class TestRerank:
         llm.complete = AsyncMock(return_value="2, 1")
         state = _state(reranked_chunks=[chunk1, chunk2], query="fastapi", rewritten_query="fastapi intro")
 
-        result = await rerank(state, llm=llm, retriever=None, redis=None)
+        result = await rerank(state, llm=llm, retriever=None, redis=None, cache_svc=None)
 
         assert result["reranked_chunks"][0] == chunk2
         assert result["reranked_chunks"][1] == chunk1
@@ -168,7 +184,7 @@ class TestRerank:
         llm.complete = AsyncMock(return_value="not, numbers, at, all")
         state = _state(reranked_chunks=[chunk1, chunk2], query="fastapi", rewritten_query="fastapi intro")
 
-        result = await rerank(state, llm=llm, retriever=None, redis=None)
+        result = await rerank(state, llm=llm, retriever=None, redis=None, cache_svc=None)
 
         assert result["reranked_chunks"] == [chunk1, chunk2]
 
@@ -179,7 +195,7 @@ class TestRerank:
         state = _state(reranked_chunks=[chunk], query="q", rewritten_query="q rewritten")
 
         with pytest.raises(RuntimeError, match="LLM timeout"):
-            await rerank(state, llm=llm, retriever=None, redis=None)
+            await rerank(state, llm=llm, retriever=None, redis=None, cache_svc=None)
 
     async def test_calls_llm_with_rewritten_query_not_original(self):
         chunk = _chunk()
@@ -191,7 +207,7 @@ class TestRerank:
             rewritten_query="optimized rewritten query",
         )
 
-        await rerank(state, llm=llm, retriever=None, redis=None)
+        await rerank(state, llm=llm, retriever=None, redis=None, cache_svc=None)
 
         prompt_arg = llm.complete.call_args[0][0]
         assert "optimized rewritten query" in prompt_arg
@@ -225,7 +241,7 @@ class TestGenerate:
         redis = _make_redis_for_generate()
         state = _state(reranked_chunks=[chunk], query="what is fastapi?")
 
-        result = await generate(state, llm=llm, retriever=None, redis=redis)
+        result = await generate(state, llm=llm, retriever=None, redis=redis, cache_svc=None)
 
         assert result["answer"] == "FastAPI is fast."
 
@@ -237,7 +253,7 @@ class TestGenerate:
         redis = _make_redis_for_generate()
         state = _state(reranked_chunks=[], job_id="job-x", query="q")
 
-        await generate(state, llm=llm, retriever=None, redis=redis)
+        await generate(state, llm=llm, retriever=None, redis=redis, cache_svc=None)
 
         assert redis.client.rpush.await_count == 2
         calls = redis.client.rpush.call_args_list
@@ -259,7 +275,7 @@ class TestGenerate:
         redis = _make_redis_for_generate()
         state = _state(reranked_chunks=[chunk], query="q")
 
-        await generate(state, llm=llm, retriever=None, redis=redis)
+        await generate(state, llm=llm, retriever=None, redis=redis, cache_svc=None)
 
         assert "unique content marker xyz" in captured[0]
 
@@ -269,7 +285,7 @@ class TestGenerate:
         redis = _make_redis_for_generate()
         state = _state(reranked_chunks=[], query="what is fastapi?")
 
-        result = await generate(state, llm=llm, retriever=None, redis=redis)
+        result = await generate(state, llm=llm, retriever=None, redis=redis, cache_svc=None)
 
         assert result["answer"] == "I don't have enough context to answer."
         assert redis.client.rpush.await_count == 1
@@ -288,7 +304,7 @@ class TestCacheWrite:
         redis.client = inner
         state = _state(session_id="sess-1", query="what is fastapi?", answer="It is fast.")
 
-        result = await cache_write(state, llm=None, retriever=None, redis=redis)
+        result = await cache_write(state, llm=None, retriever=None, redis=redis, cache_svc=None)
 
         redis.cache_key.assert_called_once()
         inner.setex.assert_awaited_once()
@@ -302,7 +318,7 @@ class TestCacheWrite:
         redis.client = inner
         state = _state(session_id="sess-abc", query="specific query", answer="ans")
 
-        await cache_write(state, llm=None, retriever=None, redis=redis)
+        await cache_write(state, llm=None, retriever=None, redis=redis, cache_svc=None)
 
         call_args = redis.cache_key.call_args
         assert "sess-abc" in str(call_args)

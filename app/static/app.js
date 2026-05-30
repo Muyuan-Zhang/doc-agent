@@ -11,9 +11,10 @@ const SESSION_ID = (() => {
 function switchPanel(panelName) {
   document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
   document.querySelectorAll(".nav-tab").forEach(t => t.classList.remove("active"));
-  
+
   document.getElementById(`${panelName}-panel`)?.classList.add("active");
   document.querySelector(`[data-panel="${panelName}"]`)?.classList.add("active");
+  document.getElementById("app")?.classList.toggle("tool-mode", panelName !== "chat");
 }
 
 document.querySelectorAll(".nav-tab").forEach(tab => {

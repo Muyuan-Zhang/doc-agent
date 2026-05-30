@@ -45,6 +45,7 @@ async def _process_message(msg: MQMessage, graph, redis, mq) -> None:
             "chunks": [],
             "reranked_chunks": [],
             "answer": "",
+            "cache_hit": False,
             "error": None,
         }
         result = await graph.ainvoke(state)

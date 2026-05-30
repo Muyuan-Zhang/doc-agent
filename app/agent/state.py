@@ -14,4 +14,5 @@ class AgentState(TypedDict):
     chunks: list[ChunkSchema]
     reranked_chunks: list[ChunkSchema]
     answer: str
+    cache_hit: bool
     error: Optional[str]

@@ -14,10 +14,10 @@ from app.agent.nodes import (
 from app.agent.state import AgentState
 
 
-def build_graph(llm, retriever, redis):
+def build_graph(llm, retriever, redis, cache_svc):
     """Compile the agent graph with bound client dependencies."""
     def _bind(node_fn):
-        return partial(node_fn, llm=llm, retriever=retriever, redis=redis)
+        return partial(node_fn, llm=llm, retriever=retriever, redis=redis, cache_svc=cache_svc)
 
     g = StateGraph(AgentState)
     g.add_node("query_rewrite",     _bind(query_rewrite))

@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 _MAX_CONTEXT_CHARS = 12_000
 
 
-async def query_rewrite(state: AgentState, *, llm, retriever, redis) -> dict:
+async def query_rewrite(state: AgentState, *, llm, retriever, redis, cache_svc) -> dict:
     prompt = (
         "Rewrite the following search query to improve document retrieval accuracy. "
         "Return only the rewritten query, nothing else.\n\n"
@@ -28,17 +28,19 @@ async def query_rewrite(state: AgentState, *, llm, retriever, redis) -> dict:
     return {"rewritten_query": rewritten.strip() or state["query"]}
 
 
-async def retrieval(state: AgentState, *, llm, retriever, redis) -> dict:
-    chunks = await retriever.retrieve(state["rewritten_query"], top_k=state["top_k"])
-    return {"chunks": list(chunks)}
+async def retrieval(state: AgentState, *, llm, retriever, redis, cache_svc) -> dict:
+    chunks, cache_hit = await cache_svc.get_or_retrieve(
+        state["rewritten_query"], retriever, top_k=state["top_k"],
+    )
+    return {"chunks": chunks, "cache_hit": cache_hit}
 
 
-async def entity_extraction(state: AgentState, *, llm, retriever, redis) -> dict:
+async def entity_extraction(state: AgentState, *, llm, retriever, redis, cache_svc) -> dict:
     # Pass-through placeholder for future Graph RAG entity extraction.
     return {"reranked_chunks": list(state["chunks"])}
 
 
-async def rerank(state: AgentState, *, llm, retriever, redis) -> dict:
+async def rerank(state: AgentState, *, llm, retriever, redis, cache_svc) -> dict:
     chunks = state["reranked_chunks"]
     if not chunks:
         return {"reranked_chunks": []}
@@ -63,7 +65,7 @@ async def rerank(state: AgentState, *, llm, retriever, redis) -> dict:
         return {"reranked_chunks": chunks}
 
 
-async def generate(state: AgentState, *, llm, retriever, redis) -> dict:
+async def generate(state: AgentState, *, llm, retriever, redis, cache_svc) -> dict:
     raw_context = "\n\n".join(c.content for c in state["reranked_chunks"])
     if len(raw_context) > _MAX_CONTEXT_CHARS:
         logger.warning(
@@ -86,7 +88,7 @@ async def generate(state: AgentState, *, llm, retriever, redis) -> dict:
     return {"answer": "".join(tokens)}
 
 
-async def cache_write(state: AgentState, *, llm, retriever, redis) -> dict:
+async def cache_write(state: AgentState, *, llm, retriever, redis, cache_svc) -> dict:
     query_hash = hashlib.sha256(state["query"].encode()).hexdigest()[:16]
     # Hash tag {rag:<session_id>} ensures Cluster-safe slot routing.
     key = redis.cache_key(f"{{rag:{state['session_id']}}}", query_hash)

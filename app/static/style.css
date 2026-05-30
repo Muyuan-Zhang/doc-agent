@@ -60,6 +60,11 @@ header h1 {
   border-color: white;
 }
 
+/* Tool tabs: full-width main area, no document sidebar */
+#app.tool-mode #upload-panel {
+  display: none;
+}
+
 #layout {
   display: flex;
   flex: 1;
@@ -72,6 +77,8 @@ header h1 {
   flex-direction: column;
   overflow: hidden;
   position: relative;
+  min-width: 0;
+  background: #f5f5f5;
 }
 
 /* ── Upload panel ── */
@@ -176,25 +183,22 @@ header h1 {
 .delete-btn:hover:not(:disabled) { color: #e55; }
 .delete-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
-/* ── Chat panel ── */
-#chat-panel {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  min-width: 0;
-}
-
-/* ── Panels system ── */
+/* ── Panels system (mutually exclusive; do not set display on #chat-panel) ── */
 .panel {
   display: none;
-  flex: 1;
+  position: absolute;
+  inset: 0;
   flex-direction: column;
   overflow: hidden;
+  background: #f5f5f5;
 }
 
 .panel.active {
   display: flex;
+}
+
+#chat-panel {
+  background: white;
 }
 
 .panel-header {

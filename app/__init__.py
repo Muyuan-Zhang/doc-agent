@@ -87,6 +87,7 @@ async def _lifespan(app: FastAPI):
         llm=app.state.llm,
         retriever=app.state.retriever,
         redis=app.state.redis,
+        cache_svc=app.state.cache_svc,
     )
     consumer_task = asyncio.create_task(
         run_consumer(app.state.mq, graph, app.state.redis)
