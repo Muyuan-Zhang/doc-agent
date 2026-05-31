@@ -1,4 +1,5 @@
 import logging
+import time
 from datetime import datetime, timezone
 
 from app.cache.quality import compute_quality
@@ -48,20 +49,33 @@ class RagCacheService:
         need to write back (e.g. save_answer) should use this value rather than
         recomputing it from the raw query string.
         """
+        t0 = time.perf_counter()
         normalized, query_hash = await self._rewriter.rewrite(query)
+        rewrite_ms = (time.perf_counter() - t0) * 1000
+
         entry = await self._store.get(query_hash)
+        lookup_ms = (time.perf_counter() - t0) * 1000 - rewrite_ms
 
         if entry is not None and entry.status == CacheStatus.APPROVED:
             await self._inc_stat("hits")
-            logger.info("cache=hit hash=%s", query_hash)
+            logger.info(
+                "cache=get_or_retrieve result=hit hash=%s chunks=%d lookup_ms=%.1f",
+                query_hash, len(entry.chunks), lookup_ms,
+            )
             return list(entry.chunks), True, query_hash
 
+        miss_reason = "no_entry" if entry is None else f"status={entry.status.value}"
         await self._inc_stat("misses")
         logger.info(
-            "cache=miss hash=%s status=%s",
-            query_hash, entry.status.value if entry else "none",
+            "cache=get_or_retrieve result=miss hash=%s reason=%s lookup_ms=%.1f",
+            query_hash, miss_reason, lookup_ms,
         )
         chunks = await retriever.retrieve(query, top_k)
+        retrieve_ms = (time.perf_counter() - t0) * 1000 - rewrite_ms - lookup_ms
+        logger.info(
+            "cache=get_or_retrieve retrieve=done hash=%s chunks=%d retrieve_ms=%.1f",
+            query_hash, len(chunks), retrieve_ms,
+        )
 
         if entry is None:
             status = await self._decide_status(normalized, chunks)
@@ -78,7 +92,16 @@ class RagCacheService:
                 await self._review.enqueue(query_hash)
             elif status == CacheStatus.APPROVED:
                 await self._inc_stat("auto_approved")
+            logger.info(
+                "cache=get_or_retrieve entry=created hash=%s status=%s",
+                query_hash, status.value,
+            )
 
+        total_ms = (time.perf_counter() - t0) * 1000
+        logger.info(
+            "cache=get_or_retrieve done hash=%s chunks=%d cache_hit=%s total_ms=%.1f",
+            query_hash, len(chunks), False, total_ms,
+        )
         return chunks, False, query_hash
 
     async def lookup_by_embedding(
@@ -87,7 +110,17 @@ class RagCacheService:
         threshold: float,
     ) -> "CacheEntry | None":
         """Return an approved cache entry whose query_embedding is within threshold."""
-        return await self._store.search_by_embedding(query_embedding, threshold=threshold)
+        t0 = time.perf_counter()
+        result = await self._store.search_by_embedding(query_embedding, threshold=threshold)
+        elapsed = time.perf_counter() - t0
+        if result is not None:
+            logger.info(
+                "cache=lookup_by_embedding result=hit hash=%s elapsed=%.3fs",
+                result.query_hash, elapsed,
+            )
+        else:
+            logger.info("cache=lookup_by_embedding result=miss elapsed=%.3fs", elapsed)
+        return result
 
     async def save_answer(
         self,
@@ -96,15 +129,30 @@ class RagCacheService:
         query_embedding: list[float],
     ) -> None:
         """Write the generated answer and query embedding back into an existing entry."""
+        t0 = time.perf_counter()
         entry = await self._store.get(query_hash)
+        load_ms = (time.perf_counter() - t0) * 1000
+
         if entry is None:
+            logger.warning("cache=save_answer hash=%s result=no_entry load_ms=%.1f", query_hash, load_ms)
             return
+
+        logger.info(
+            "cache=save_answer hash=%s result=writing status=%s answer_len=%d load_ms=%.1f",
+            query_hash, entry.status.value, len(answer), load_ms,
+        )
         if entry.status != CacheStatus.APPROVED:
             logger.debug("save_answer=skipped hash=%s status=%s", query_hash, entry.status.value)
             return
         updated = entry.model_copy(update={"answer": answer, "query_embedding": query_embedding})
         ttl = await self._store.get_ttl(query_hash)
-        await self._store.set(updated, ttl if ttl > 0 else self._cfg.cache_ttl_seconds)
+        effective_ttl = ttl if ttl > 0 else self._cfg.cache_ttl_seconds
+        await self._store.set(updated, effective_ttl)
+        total_ms = (time.perf_counter() - t0) * 1000
+        logger.info(
+            "cache=save_answer hash=%s result=done ttl=%d total_ms=%.1f",
+            query_hash, effective_ttl, total_ms,
+        )
 
     async def _decide_status(
         self, query: str, chunks: list[ChunkSchema],
@@ -117,44 +165,48 @@ class RagCacheService:
             >= threshold → APPROVED, < threshold → PENDING_REVIEW
         """
         if not self._cfg.cache_auto_approve:
+            logger.info("cache=decide_status result=PENDING_REVIEW reason=auto_approve_disabled")
             return CacheStatus.PENDING_REVIEW
 
         if not chunks:
-            logger.info("cache=empty_chunks — PENDING_REVIEW")
+            logger.info("cache=decide_status result=PENDING_REVIEW reason=empty_chunks")
             return CacheStatus.PENDING_REVIEW
 
         threshold = self._cfg.cache_quality_threshold
         if threshold <= 0.0:
+            logger.info("cache=decide_status result=APPROVED reason=threshold_zero")
             return CacheStatus.APPROVED
 
+        embed_t0 = time.perf_counter()
         try:
             query_embedding = await self._llm.embed(query)
         except Exception as exc:
             logger.warning(
-                "cache=embed_failed query=%s error=%s — falling back to PENDING_REVIEW",
+                "cache=decide_status result=PENDING_REVIEW reason=embed_failed query=%s error=%s",
                 query[:80], exc,
             )
             return CacheStatus.PENDING_REVIEW
+        embed_ms = (time.perf_counter() - embed_t0) * 1000
 
         try:
             score = compute_quality(query_embedding, chunks)
         except Exception as exc:
             logger.warning(
-                "cache=quality_failed query=%s error=%s — falling back to PENDING_REVIEW",
+                "cache=decide_status result=PENDING_REVIEW reason=quality_failed query=%s error=%s",
                 query[:80], exc,
             )
             return CacheStatus.PENDING_REVIEW
 
         if score >= threshold:
             logger.info(
-                "cache=auto_approved score=%.4f threshold=%.2f",
-                score, threshold,
+                "cache=decide_status result=APPROVED reason=quality score=%.4f threshold=%.2f embed_ms=%.1f",
+                score, threshold, embed_ms,
             )
             return CacheStatus.APPROVED
 
         logger.info(
-            "cache=quality_below_threshold score=%.4f threshold=%.2f — PENDING_REVIEW",
-            score, threshold,
+            "cache=decide_status result=PENDING_REVIEW reason=low_quality score=%.4f threshold=%.2f embed_ms=%.1f chunks=%d",
+            score, threshold, embed_ms, len(chunks),
         )
         return CacheStatus.PENDING_REVIEW
 

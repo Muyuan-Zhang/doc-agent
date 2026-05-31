@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 
 from app.clients.llm import AbstractLLMClient
 from app.core.config import settings
@@ -24,9 +25,14 @@ class LLMReranker:
     async def rerank(
         self, query: str, chunks: list[ChunkSchema], top_n: int
     ) -> list[ChunkSchema]:
+        t0 = time.perf_counter()
+        logger.info("reranker=enter chunks=%d top_n=%d query=%.80s", len(chunks), top_n, query)
+
         if not chunks:
+            logger.info("reranker=skip reason=no_chunks elapsed=%.3fs", time.perf_counter() - t0)
             return []
         if len(chunks) == 1:
+            logger.info("reranker=skip reason=single_chunk elapsed=%.3fs", time.perf_counter() - t0)
             return chunks[:top_n]
 
         chunks_text = "\n".join(
@@ -37,12 +43,15 @@ class LLMReranker:
             + f"\nQuery: <<<{query}>>>\n\nChunks:\n{chunks_text}\n\nReturn JSON only."
         )
 
+        llm_t0 = time.perf_counter()
         try:
             async with self._sem:
                 response = await self._llm.complete(prompt)
         except Exception as exc:
-            logger.warning("LLM reranker call failed, falling back to original order: %s", exc)
+            llm_elapsed = time.perf_counter() - llm_t0
+            logger.warning("reranker=llm_failed error=%s elapsed=%.3fs — falling back", exc, llm_elapsed)
             return chunks[:top_n]
+        llm_elapsed = time.perf_counter() - llm_t0
 
         try:
             data = json.loads(response)
@@ -55,7 +64,14 @@ class LLMReranker:
             for i, c in enumerate(chunks):
                 if i not in mentioned:
                     reranked.append(c)
-            return reranked[:top_n]
+            result = reranked[:top_n]
+            elapsed = time.perf_counter() - t0
+            logger.info(
+                "reranker=done input=%d output=%d llm_ms=%.1f elapsed=%.3fs",
+                len(chunks), len(result), llm_elapsed * 1000, elapsed,
+            )
+            return result
         except Exception as exc:
-            logger.warning("LLM reranker parsing failed, falling back to original order: %s", exc)
+            elapsed = time.perf_counter() - t0
+            logger.warning("reranker=parse_failed error=%s elapsed=%.3fs — falling back", exc, elapsed)
             return chunks[:top_n]

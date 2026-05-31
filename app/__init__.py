@@ -15,6 +15,7 @@ from app.clients.milvus import MilvusClient
 from app.clients.mq import ConsistencyMQClient, RedisStreamsMQClient
 from app.clients.postgresql import PostgreSQLClient
 from app.clients.redis import RedisClient
+from app.memory.service import MemoryService
 from app.consistency.consumer import ConsistencyConsumer
 from app.consistency.invalidator import CacheInvalidator
 from app.consistency.service import ConsistencyService
@@ -83,11 +84,20 @@ async def _lifespan(app: FastAPI):
     app.state.retriever = ConcreteHybridRetriever(bm25=bm25, vector=vector, reranker=reranker)
     app.state.cache_svc = RagCacheService(redis=app.state.redis, llm=app.state.llm)
 
+    memory_svc = MemoryService(
+        pg=app.state.postgres,
+        redis=app.state.redis,
+        milvus=app.state.milvus,
+        llm=app.state.llm,
+    )
+    app.state.memory_svc = memory_svc
+
     graph = build_graph(
         llm=app.state.llm,
         retriever=app.state.retriever,
         redis=app.state.redis,
         cache_svc=app.state.cache_svc,
+        memory_svc=memory_svc,
     )
     consumer_task = asyncio.create_task(
         run_consumer(app.state.mq, graph, app.state.redis)

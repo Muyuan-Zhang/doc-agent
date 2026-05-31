@@ -1,4 +1,5 @@
 import logging
+import time
 
 from app.cache.quality import cosine_similarity
 from app.cache.schemas import CacheEntry, CacheStatus, validate_transition
@@ -61,8 +62,10 @@ class RagCacheStore:
             self._entry_key(entry.query_hash), ttl, entry.model_dump_json()
         )
         logger.info(
-            "cache_store=set hash=%s status=%s ttl=%d",
+            "cache_store=set hash=%s status=%s ttl=%d answer_len=%d has_embedding=%s",
             entry.query_hash, entry.status.value, ttl,
+            len(entry.answer or ""),
+            entry.query_embedding is not None,
         )
 
     async def update_status_under_lock(
@@ -75,6 +78,7 @@ class RagCacheStore:
         """Apply a status update without acquiring the lock. Caller MUST hold the lock."""
         existing = await self.get(query_hash)
         if existing is None:
+            logger.warning("cache_store=update_status_under_lock hash=%s result=not_found", query_hash)
             return False
         validate_transition(existing.status, new_status)
         data = existing.model_dump()
@@ -86,9 +90,14 @@ class RagCacheStore:
         updated = CacheEntry.model_validate(data)
         ttl = await self._redis.client.ttl(self._entry_key(query_hash))
         if ttl == -2:
-            # Entry expired between get() and TTL lookup — do not reanimate
+            logger.warning("cache_store=update_status_under_lock hash=%s result=expired", query_hash)
             return False
-        await self.set(updated, ttl if ttl > 0 else self._cfg.cache_ttl_seconds)
+        effective_ttl = ttl if ttl > 0 else self._cfg.cache_ttl_seconds
+        await self.set(updated, effective_ttl)
+        logger.info(
+            "cache_store=update_status_under_lock hash=%s from=%s to=%s approval_count=%s",
+            query_hash, existing.status.value, new_status.value, approval_count,
+        )
         return True
 
     async def update_status(
@@ -111,6 +120,7 @@ class RagCacheStore:
 
     async def delete(self, query_hash: str) -> bool:
         result = await self._redis.client.delete(self._entry_key(query_hash))
+        logger.info("cache_store=delete hash=%s deleted=%s", query_hash, bool(result))
         return bool(result)
 
     async def invalidate_all(self) -> int:
@@ -127,7 +137,7 @@ class RagCacheStore:
                 deleted += len(keys)
             if cursor == 0:
                 break
-        logger.info("cache_store=invalidate_all deleted=%d", deleted)
+        logger.info("cache_store=invalidate_all deleted=%d pattern=%s", deleted, pattern)
         return deleted
 
     async def increment_stat(self, stat: str) -> None:
@@ -138,16 +148,20 @@ class RagCacheStore:
 
     async def get_stats(self) -> dict:
         pending_key = self._redis.cache_key("review", "pending")
+        t0 = time.perf_counter()
         pipe = self._redis.client.pipeline()
         pipe.hgetall(self._stats_key())
         pipe.zcard(pending_key)
         raw_stats, pending = await pipe.execute()
-        return {
+        elapsed = time.perf_counter() - t0
+        result = {
             "hits": int(raw_stats.get("hits", 0)),
             "misses": int(raw_stats.get("misses", 0)),
             "auto_approved": int(raw_stats.get("auto_approved", 0)),
             "pending": int(pending),
         }
+        logger.debug("cache_store=get_stats elapsed=%.3fs stats=%s", elapsed, result)
+        return result
 
     async def search_by_embedding(
         self,
@@ -159,14 +173,22 @@ class RagCacheStore:
         Returns None when no entry exceeds the threshold or has a stored
         query_embedding.  Iterates via SCAN to avoid blocking Redis.
         """
+        t0 = time.perf_counter()
         pattern = self._redis.cache_key("rag_cache", "*")
         best_entry: CacheEntry | None = None
         best_score: float = threshold - _THRESHOLD_EPSILON
+        scanned_keys = 0
+        skipped_no_entry = 0
+        skipped_not_approved = 0
+        skipped_no_embedding = 0
+        skipped_parse_error = 0
+        skipped_value_error = 0
         cursor = 0
         while True:
             cursor, keys = await self._redis.client.scan(
                 cursor, match=pattern, count=_SCAN_COUNT
             )
+            scanned_keys += len(keys)
             if keys:
                 pipe = self._redis.client.pipeline()
                 for raw_key in keys:
@@ -174,24 +196,44 @@ class RagCacheStore:
                 raws = await pipe.execute()
                 for raw in raws:
                     if raw is None:
+                        skipped_no_entry += 1
                         continue
                     try:
                         entry = CacheEntry.model_validate_json(raw)
                     except Exception:
+                        skipped_parse_error += 1
                         continue
                     if entry.status != CacheStatus.APPROVED:
+                        skipped_not_approved += 1
                         continue
                     if not entry.query_embedding:
+                        skipped_no_embedding += 1
                         continue
                     try:
                         score = cosine_similarity(query_embedding, entry.query_embedding)
                     except ValueError:
+                        skipped_value_error += 1
                         continue
                     if score > best_score:
                         best_score = score
                         best_entry = entry
             if cursor == 0:
                 break
+
+        elapsed = time.perf_counter() - t0
+        logger.info(
+            "cache_store=search_by_embedding result=%s best_score=%.4f threshold=%.4f scanned=%d skip_no_entry=%d skip_not_approved=%d skip_no_embedding=%d skip_parse=%d skip_value=%d elapsed=%.3fs",
+            "hit" if best_entry is not None else "miss",
+            best_score, threshold,
+            scanned_keys, skipped_no_entry, skipped_not_approved,
+            skipped_no_embedding, skipped_parse_error, skipped_value_error,
+            elapsed,
+        )
+        if best_entry is not None:
+            logger.info(
+                "cache_store=search_by_embedding match hash=%s score=%.4f has_answer=%s",
+                best_entry.query_hash, best_score, bool(best_entry.answer),
+            )
         return best_entry
 
     async def get_ttl(self, query_hash: str) -> int:

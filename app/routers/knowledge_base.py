@@ -6,7 +6,7 @@ from app.core.rate_limit import rate_limiter
 from app.knowledge_base.embedder import ChunkEmbedder
 from app.knowledge_base.service import KnowledgeBaseService
 
-_upload_rate_limit = rate_limiter("kb:upload", limit=10, window_seconds=60)
+_upload_rate_limit = rate_limiter("kb:upload", limit=100, window_seconds=60)
 
 router = APIRouter(prefix="/knowledge-base", tags=["knowledge-base"])
 

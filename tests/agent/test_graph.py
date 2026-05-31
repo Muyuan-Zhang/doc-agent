@@ -26,11 +26,27 @@ class TestBuildGraph:
 
         assert graph is not None
 
-    def test_graph_has_six_nodes(self):
+    def test_graph_has_required_nodes(self):
         graph = build_graph(llm=MagicMock(), retriever=MagicMock(), redis=MagicMock(), cache_svc=MagicMock())
         node_names = set(graph.get_graph().nodes.keys())
-        expected = {"query_rewrite", "retrieval", "entity_extraction", "rerank", "generate", "cache_write"}
+        expected = {"cache_lookup", "stream_cached", "query_rewrite", "retrieval",
+                    "entity_extraction", "rerank", "generate", "cache_write"}
         assert expected.issubset(node_names)
+
+    def test_graph_has_retrieve_memory_node_when_memory_svc_provided(self):
+        graph = build_graph(llm=MagicMock(), retriever=MagicMock(), redis=MagicMock(),
+                          cache_svc=MagicMock(), memory_svc=MagicMock())
+        node_names = set(graph.get_graph().nodes.keys())
+        assert "retrieve_memory" in node_names
+
+    def test_graph_includes_retrieve_memory_in_cache_miss_path(self):
+        """When memory_svc is provided, retrieve_memory should be between cache_lookup and query_rewrite."""
+        graph = build_graph(llm=MagicMock(), retriever=MagicMock(), redis=MagicMock(),
+                          cache_svc=MagicMock(), memory_svc=MagicMock())
+        edges = graph.get_graph().edges
+        # retrieve_memory should have an incoming edge from cache_lookup (on miss path)
+        sources_to_retrieve_memory = {e.source for e in edges if e.target == "retrieve_memory"}
+        assert "cache_lookup" in sources_to_retrieve_memory
 
     async def test_graph_invocation_end_to_end(self):
         chunk = _chunk()
@@ -68,6 +84,8 @@ class TestBuildGraph:
             "query_embedding": None,
             "rag_cache_hash": None,
             "error": None,
+            "user_id": "",
+            "memory_context": None,
         })
 
         assert result["answer"] == "A great answer."
@@ -125,6 +143,9 @@ class TestBuildGraphNewTopology:
             "session_id": "s1", "job_id": "j1", "query": "q",
             "top_k": 5, "rewritten_query": "", "chunks": [],
             "reranked_chunks": [], "answer": "", "cache_hit": False,
+            "cached_answer": "", "query_embedding": None,
+            "rag_cache_hash": None, "error": None,
+            "user_id": "", "memory_context": None,
             "chunk_cache_hit": False, "cached_answer": "", "query_embedding": None, "error": None,
         })
 
@@ -159,12 +180,22 @@ class TestBuildGraphNewTopology:
             "session_id": "s1", "job_id": "j1", "query": "q",
             "top_k": 5, "rewritten_query": "", "chunks": [],
             "reranked_chunks": [], "answer": "", "cache_hit": False,
+            "cached_answer": "", "query_embedding": None,
+            "rag_cache_hash": None, "error": None,
+            "user_id": "", "memory_context": None,
             "chunk_cache_hit": False, "cached_answer": "", "query_embedding": None, "error": None,
         })
 
         assert result["answer"] == "generated answer"
         llm.complete.assert_awaited()  # query_rewrite and rerank both called complete
 
+    async def test_full_pipeline_with_memory_context_injection(self):
+        """When memory_svc is provided and user_id set, retrieve_memory runs
+        and the memory context flows into generate's prompt."""
+        from app.memory.schemas import ConversationTurn, MemoryContext, MemorySummary, StaticFact
+
+        async def _stream(prompt, **kw):
+            yield "memory-aware answer"
 
 # ---------------------------------------------------------------------------
 # Bug 1 fix: Layer 2 chunk hit skips entity_extraction and rerank
@@ -190,6 +221,24 @@ class TestLayer2ChunkHitSkipsRerank:
 
         chunk = _chunk()
         cache_svc = MagicMock()
+        cache_svc.lookup_by_embedding = AsyncMock(return_value=None)
+        cache_svc.get_or_retrieve = AsyncMock(return_value=([chunk], False, "aabb112233440000"))
+        cache_svc.save_answer = AsyncMock()
+
+        memory_ctx = MemoryContext(
+            turns=[
+                ConversationTurn(session_id="s1", role="user", content="I like conciseness.", ts=1.0),
+            ],
+            summary=None,
+            static_facts=[],
+        )
+        memory_svc = MagicMock()
+        memory_svc.retrieve_context = AsyncMock(return_value=memory_ctx)
+
+        graph = build_graph(
+            llm=llm, retriever=MagicMock(), redis=redis,
+            cache_svc=cache_svc, memory_svc=memory_svc,
+        )
         cache_svc.lookup_by_embedding = AsyncMock(return_value=None)  # Layer 1 miss
         # Layer 2 hit: returns chunks, cache_hit=True
         cache_svc.get_or_retrieve = AsyncMock(return_value=([chunk], True, "aabb112233440000"))
@@ -200,6 +249,16 @@ class TestLayer2ChunkHitSkipsRerank:
             "session_id": "s1", "job_id": "j1", "query": "q",
             "top_k": 5, "rewritten_query": "", "chunks": [],
             "reranked_chunks": [], "answer": "", "cache_hit": False,
+            "cached_answer": "", "query_embedding": None,
+            "rag_cache_hash": None, "error": None,
+            "user_id": "u1", "memory_context": None,
+        })
+
+        assert result["answer"] == "memory-aware answer"
+        # Memory service should have been called
+        memory_svc.retrieve_context.assert_awaited_once_with(
+            "s1", "u1", query_embedding=[0.1] * 5,
+        )
             "cached_answer": "", "query_embedding": None, "rag_cache_hash": None,
             "chunk_cache_hit": False, "error": None,
         })

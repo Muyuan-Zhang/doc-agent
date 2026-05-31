@@ -11,10 +11,12 @@ from app.agent.consumer import _process_message, run_consumer
 from app.clients.mq import MQMessage
 
 
-def _make_msg(job_id: str = "job-1", query: str = "hello", session_id: str = "s1") -> MQMessage:
+def _make_msg(job_id: str = "job-1", query: str = "hello", session_id: str = "s1",
+             user_id: str = "") -> MQMessage:
     return MQMessage(
         id=f"{job_id}-0",
-        data={"job_id": job_id, "session_id": session_id, "query": query, "top_k": "5"},
+        data={"job_id": job_id, "session_id": session_id, "query": query, "top_k": "5",
+              "user_id": user_id},
         stream="doc-agent:tasks",
     )
 
@@ -44,7 +46,8 @@ def _make_graph_mock(answer: str = "great answer") -> MagicMock:
 
 class TestProcessMessage:
     async def test_invokes_graph_with_correct_initial_state(self):
-        msg = _make_msg(job_id="j1", query="what is redis?", session_id="sess-x")
+        msg = _make_msg(job_id="j1", query="what is redis?", session_id="sess-x",
+                        user_id="u1")
         graph = _make_graph_mock()
         redis = _make_redis_mock()
         mq = MagicMock()
@@ -57,6 +60,19 @@ class TestProcessMessage:
         assert invoked_state["query"] == "what is redis?"
         assert invoked_state["session_id"] == "sess-x"
         assert invoked_state["top_k"] == 5
+        assert invoked_state["user_id"] == "u1"
+
+    async def test_user_id_defaults_to_empty_string_when_not_in_message(self):
+        msg = _make_msg(job_id="j1", session_id="sess-x", user_id="")
+        graph = _make_graph_mock()
+        redis = _make_redis_mock()
+        mq = MagicMock()
+        mq.ack = AsyncMock()
+
+        await _process_message(msg, graph, redis, mq)
+
+        invoked_state = graph.ainvoke.call_args[0][0]
+        assert invoked_state["user_id"] == ""
 
 
     async def test_acks_message_on_success(self):

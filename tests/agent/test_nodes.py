@@ -15,6 +15,7 @@ from app.agent.nodes import (
     retrieval,
 )
 from app.models.chunk import ChunkSchema
+from app.memory.schemas import ConversationTurn, MemoryContext, MemorySummary, StaticFact
 
 
 def _chunk(**overrides) -> ChunkSchema:
@@ -40,8 +41,13 @@ def _state(**overrides) -> dict:
         reranked_chunks=[],
         answer="",
         cache_hit=False,
+        cached_answer="",
+        query_embedding=None,
+        rag_cache_hash=None,
         chunk_cache_hit=False,
         error=None,
+        user_id="",
+        memory_context=None,
     )
     return {**base, **overrides}
 
@@ -493,6 +499,223 @@ class TestGenerateSavesAnswer:
 
         cache_svc.save_answer.assert_not_awaited()
 
+
+# ---------------------------------------------------------------------------
+# retrieve_memory  (new M5 integration node)
+# ---------------------------------------------------------------------------
+
+def _make_memory_context(**overrides) -> MemoryContext:
+    defaults = dict(
+        turns=[
+            ConversationTurn(session_id="sess-1", role="user", content="hello", ts=1.0),
+            ConversationTurn(session_id="sess-1", role="assistant", content="hi there", ts=2.0),
+        ],
+        summary=MemorySummary(
+            summary_id="sum-1",
+            user_id="u1",
+            session_id="sess-1",
+            summary_text="User discussed FastAPI.",
+            content_hash="sh1",
+        ),
+        static_facts=[
+            StaticFact(
+                fact_id="f1",
+                user_id="u1",
+                content="User prefers concise answers.",
+                content_hash="fh1",
+            ),
+        ],
+    )
+    return MemoryContext(**(defaults | overrides))
+
+
+class TestRetrieveMemory:
+    async def test_fetches_memory_context_when_user_id_provided(self):
+        from app.agent.nodes import retrieve_memory
+
+        ctx = _make_memory_context()
+        memory_svc = MagicMock()
+        memory_svc.retrieve_context = AsyncMock(return_value=ctx)
+        state = _state(
+            session_id="sess-1",
+            user_id="u1",
+            query_embedding=[0.1, 0.2, 0.3],
+        )
+
+        result = await retrieve_memory(state, memory_svc=memory_svc)
+
+        assert result["memory_context"] is ctx
+        memory_svc.retrieve_context.assert_awaited_once_with(
+            "sess-1", "u1", query_embedding=[0.1, 0.2, 0.3],
+        )
+
+    async def test_passes_query_embedding_for_relevance_scoring(self):
+        from app.agent.nodes import retrieve_memory
+
+        memory_svc = MagicMock()
+        memory_svc.retrieve_context = AsyncMock(return_value=_make_memory_context())
+        state = _state(
+            session_id="sess-1",
+            user_id="u1",
+            query_embedding=[0.5, 0.6, 0.7],
+        )
+
+        await retrieve_memory(state, memory_svc=memory_svc)
+
+        call_kwargs = memory_svc.retrieve_context.call_args
+        assert call_kwargs.kwargs["query_embedding"] == [0.5, 0.6, 0.7]
+
+    async def test_returns_none_when_user_id_empty(self):
+        from app.agent.nodes import retrieve_memory
+
+        memory_svc = MagicMock()
+        memory_svc.retrieve_context = AsyncMock()
+        state = _state(session_id="sess-1", user_id="")
+
+        result = await retrieve_memory(state, memory_svc=memory_svc)
+
+        assert result["memory_context"] is None
+        memory_svc.retrieve_context.assert_not_awaited()
+
+    async def test_returns_none_when_memory_svc_is_none(self):
+        from app.agent.nodes import retrieve_memory
+
+        state = _state(session_id="sess-1", user_id="u1", query_embedding=[0.1])
+
+        result = await retrieve_memory(state, memory_svc=None)
+
+        assert result["memory_context"] is None
+
+    async def test_fetches_without_query_embedding_gracefully(self):
+        from app.agent.nodes import retrieve_memory
+
+        memory_svc = MagicMock()
+        memory_svc.retrieve_context = AsyncMock(return_value=_make_memory_context(
+            static_facts=[],
+        ))
+        state = _state(session_id="sess-1", user_id="u1", query_embedding=None)
+
+        result = await retrieve_memory(state, memory_svc=memory_svc)
+
+        memory_svc.retrieve_context.assert_awaited_once_with(
+            "sess-1", "u1", query_embedding=None,
+        )
+        assert result["memory_context"].static_facts == []
+
+
+# ---------------------------------------------------------------------------
+# generate — memory context injection into prompt
+# ---------------------------------------------------------------------------
+
+class TestGenerateMemoryContext:
+    async def test_includes_summary_text_in_prompt(self):
+        chunk = _chunk(content="FastAPI is a web framework.")
+        captured: list[str] = []
+
+        async def _capture(prompt, **kw):
+            captured.append(prompt)
+            yield "ok"
+
+        llm = MagicMock()
+        llm.stream_complete = _capture
+        redis = _make_redis_for_generate()
+        ctx = _make_memory_context(
+            turns=[],
+            static_facts=[],
+        )
+        state = _state(reranked_chunks=[chunk], query="q", memory_context=ctx)
+
+        await generate(state, llm=llm, retriever=None, redis=redis, cache_svc=None)
+
+        assert "User discussed FastAPI." in captured[0]
+
+    async def test_includes_recent_turns_in_prompt(self):
+        chunk = _chunk(content="context")
+        captured: list[str] = []
+
+        async def _capture(prompt, **kw):
+            captured.append(prompt)
+            yield "ok"
+
+        llm = MagicMock()
+        llm.stream_complete = _capture
+        redis = _make_redis_for_generate()
+        ctx = _make_memory_context(
+            summary=None,
+            static_facts=[],
+            turns=[
+                ConversationTurn(session_id="sess-1", role="user", content="What is Python?", ts=1.0),
+                ConversationTurn(session_id="sess-1", role="assistant", content="A programming language.", ts=2.0),
+            ],
+        )
+        state = _state(reranked_chunks=[chunk], query="q", memory_context=ctx)
+
+        await generate(state, llm=llm, retriever=None, redis=redis, cache_svc=None)
+
+        assert "What is Python?" in captured[0]
+        assert "A programming language." in captured[0]
+
+    async def test_includes_static_facts_in_prompt(self):
+        chunk = _chunk(content="context")
+        captured: list[str] = []
+
+        async def _capture(prompt, **kw):
+            captured.append(prompt)
+            yield "ok"
+
+        llm = MagicMock()
+        llm.stream_complete = _capture
+        redis = _make_redis_for_generate()
+        ctx = _make_memory_context(
+            turns=[],
+            summary=None,
+            static_facts=[
+                StaticFact(fact_id="f1", user_id="u1", content="Prefers bullet points.", content_hash="h1"),
+            ],
+        )
+        state = _state(reranked_chunks=[chunk], query="q", memory_context=ctx)
+
+        await generate(state, llm=llm, retriever=None, redis=redis, cache_svc=None)
+
+        assert "Prefers bullet points." in captured[0]
+
+    async def test_prompt_works_when_memory_context_is_none(self):
+        chunk = _chunk(content="context")
+        captured: list[str] = []
+
+        async def _capture(prompt, **kw):
+            captured.append(prompt)
+            yield "ok"
+
+        llm = MagicMock()
+        llm.stream_complete = _capture
+        redis = _make_redis_for_generate()
+        state = _state(reranked_chunks=[chunk], query="q", memory_context=None)
+
+        # Should not raise
+        result = await generate(state, llm=llm, retriever=None, redis=redis, cache_svc=None)
+        assert result["answer"] == "ok"
+
+    async def test_prompt_includes_all_three_sections_when_populated(self):
+        chunk = _chunk(content="context")
+        captured: list[str] = []
+
+        async def _capture(prompt, **kw):
+            captured.append(prompt)
+            yield "ok"
+
+        llm = MagicMock()
+        llm.stream_complete = _capture
+        redis = _make_redis_for_generate()
+        ctx = _make_memory_context()
+        state = _state(reranked_chunks=[chunk], query="q", memory_context=ctx)
+
+        await generate(state, llm=llm, retriever=None, redis=redis, cache_svc=None)
+
+        prompt = captured[0]
+        assert "[Conversation summary]" in prompt
+        assert "[Recent turns]" in prompt
+        assert "[User knowledge]" in prompt
     async def test_save_answer_not_called_on_chunk_cache_hit(self):
         chunk = _chunk(content="cached chunk")
         llm = MagicMock()

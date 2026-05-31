@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+import time
 from typing import Any, Callable, TypeVar
 
 from pymilvus import Collection, CollectionSchema, DataType, FieldSchema, connections, utility
@@ -100,16 +101,21 @@ class MilvusClient(AbstractClient):
 
     async def insert(self, entities: list[dict]) -> list[str]:
         """Insert entities into the knowledge-base collection, return primary keys."""
+        t0 = time.perf_counter()
         def _insert() -> list[str]:
             col = Collection(settings.milvus_kb_collection, using=self._alias)
             result = col.insert(entities)
             return [str(pk) for pk in result.primary_keys]
 
-        return await self._run_sync(_insert)
+        pks = await self._run_sync(_insert)
+        elapsed = time.perf_counter() - t0
+        logger.info("milvus=insert collection=%s count=%d elapsed=%.3fs", settings.milvus_kb_collection, len(entities), elapsed)
+        return pks
 
     async def delete_by_doc_id(self, doc_id: str) -> None:
         """Delete all vectors belonging to a document (two-step: query then delete by PK)."""
         _assert_uuid(doc_id)
+        t0 = time.perf_counter()
 
         def _delete() -> None:
             col = Collection(settings.milvus_kb_collection, using=self._alias)
@@ -123,6 +129,8 @@ class MilvusClient(AbstractClient):
             col.delete(expr=f"chunk_id in [{ids_expr}]")
 
         await self._run_sync(_delete)
+        elapsed = time.perf_counter() - t0
+        logger.info("milvus=delete_by_doc_id doc=%s elapsed=%.3fs", doc_id, elapsed)
 
     async def search(
         self,
@@ -138,6 +146,7 @@ class MilvusClient(AbstractClient):
                 "version", "content", "content_hash",
             ]
 
+        t0 = time.perf_counter()
         def _search() -> list[dict]:
             col = Collection(settings.milvus_kb_collection, using=self._alias)
             results = col.search(
@@ -154,7 +163,10 @@ class MilvusClient(AbstractClient):
                 hits.append(entity)
             return hits
 
-        return await self._run_sync(_search)
+        hits = await self._run_sync(_search)
+        elapsed = time.perf_counter() - t0
+        logger.info("milvus=search collection=%s top_k=%d hits=%d elapsed=%.3fs", settings.milvus_kb_collection, top_k, len(hits), elapsed)
+        return hits
 
     async def ensure_memory_collection(self) -> None:
         """Idempotently create the memory-vectors collection with HNSW index."""

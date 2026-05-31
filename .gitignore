@@ -14,3 +14,29 @@ venv/
 
 # Claude Code local session settings (per-developer, not shared)
 .claude/settings.local.json
+
+# Logs & PID
+logs/
+*.log
+.uvicorn.pid
+
+# IDE
+.vscode/
+.idea/
+
+# Test artifacts
+.playwright-mcp/
+tests/e2e/playwright/
+
+# Debug / scratch scripts
+_check_ui.py
+_debug_cache.py
+
+# Screenshots
+*.png
+
+# MCP local config
+.mcp.json
+
+# Worktree state (git-managed internally)
+.claude/worktrees/

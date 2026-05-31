@@ -86,16 +86,24 @@ class MemoryService:
         user_id: str,
         query_embedding: list[float] | None = None,
     ) -> MemoryContext:
+        t0 = time.perf_counter()
         turns = await self._recent.get_turns(self._redis, session_id)
         summary = await self._summary.get_latest_summary(self._pg, user_id, session_id)
-        static_facts: list[StaticFact] = []
         if query_embedding is not None:
             static_facts = await self._static.search_facts(
                 self._milvus, query_embedding, user_id
             )
+        else:
+            static_facts = await self._static.list_facts(self._pg, user_id)
+        elapsed = time.perf_counter() - t0
+        logger.info(
+            "memory=retrieve_context session=%s user=%s turns=%d has_summary=%s facts=%d elapsed=%.3fs",
+            session_id, user_id, len(turns), summary is not None, len(static_facts), elapsed,
+        )
         return MemoryContext(turns=turns, summary=summary, static_facts=static_facts)
 
     async def summarize_session(self, session_id: str, user_id: str) -> MemorySummary:
+        t0 = time.perf_counter()
         turns = await self._recent.get_turns(self._redis, session_id)
         previous = await self._summary.get_latest_summary(self._pg, user_id, session_id)
         summary = await self._summary.compact(
@@ -103,12 +111,19 @@ class MemoryService:
             previous_summary=previous,
         )
         await _clear_with_retry(self._recent, self._redis, session_id)
+        elapsed = time.perf_counter() - t0
+        logger.info("memory=summarize_session session=%s user=%s turns=%d elapsed=%.3fs", session_id, user_id, len(turns), elapsed)
         return summary
 
     async def add_static_fact(self, user_id: str, content: str) -> StaticFact:
-        return await self._static.add_fact(
+        t0 = time.perf_counter()
+        result = await self._static.add_fact(
             self._pg, self._milvus, self._llm, user_id, content
         )
+        elapsed = time.perf_counter() - t0
+        logger.info("memory=add_static_fact user=%s fact_id=%s content=%.80s elapsed=%.3fs", user_id, result.fact_id, content, elapsed)
+        return result
 
     async def delete_static_fact(self, fact_id: str, user_id: str) -> None:
+        logger.info("memory=delete_static_fact user=%s fact_id=%s", user_id, fact_id)
         await self._static.delete_fact(self._pg, self._milvus, fact_id, user_id)

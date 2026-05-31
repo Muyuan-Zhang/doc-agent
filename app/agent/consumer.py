@@ -6,6 +6,7 @@ the FastAPI lifespan shuts down.
 """
 import asyncio
 import logging
+import time
 
 from app.agent._keys import job_key, token_stream_key
 from app.agent.state import AgentState
@@ -30,10 +31,14 @@ async def _set_job_status(
     await redis.client.hset(key, mapping={"status": status, "answer": answer, "error": error})
     await redis.client.expire(key, settings.agent_job_ttl_seconds)
     await redis.client.expire(token_stream_key(job_id), settings.agent_job_ttl_seconds)
+    logger.info("job_status=update job=%s status=%s answer_len=%d error=%.200s", job_id, status, len(answer), error)
 
 
 async def _process_message(msg: MQMessage, graph, redis, mq) -> None:
     job_id = msg.data.get("job_id", "unknown")
+    t0 = time.perf_counter()
+    logger.info("job=start job=%s session=%s query=%.120s", job_id, msg.data.get("session_id", ""), msg.data.get("query", ""))
+
     try:
         await _set_job_status(redis, job_id, "running")
         state: AgentState = {
@@ -51,18 +56,26 @@ async def _process_message(msg: MQMessage, graph, redis, mq) -> None:
             "query_embedding": None,
             "rag_cache_hash": None,
             "error": None,
+            "user_id": msg.data.get("user_id", ""),
+            "memory_context": None,
         }
         result = await graph.ainvoke(state)
-        await _set_job_status(redis, job_id, "done", answer=result.get("answer", ""))
+        total = time.perf_counter() - t0
+        answer = result.get("answer", "")
+        logger.info("job=done job=%s answer_len=%d total_elapsed=%.3fs", job_id, len(answer), total)
+        await _set_job_status(redis, job_id, "done", answer=answer)
     except asyncio.CancelledError:
+        logger.info("job=cancelled job=%s elapsed=%.3fs", job_id, time.perf_counter() - t0)
         raise
     except Exception as exc:
-        logger.error("Job %s failed: %s", job_id, exc)
-        logger.debug("Job %s exception detail:", job_id, exc_info=True)
+        total = time.perf_counter() - t0
+        logger.error("job=failed job=%s error=%s elapsed=%.3fs", job_id, exc, total)
+        logger.debug("job=%s exception detail:", job_id, exc_info=True)
         error_msg = f"{type(exc).__name__}: job processing failed"
         await _set_job_status(redis, job_id, "error", error=error_msg)
     finally:
         await mq.ack(msg.id)
+        logger.debug("job=acked job=%s", job_id)
 
 
 async def run_consumer(mq, graph, redis) -> None:
