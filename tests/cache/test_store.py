@@ -316,7 +316,7 @@ class TestRagCacheStoreStats:
         redis, inner = _make_redis()
         inner.pipeline = MagicMock(return_value=pipe)
         stats = await RagCacheStore(redis).get_stats()
-        assert stats == {"hits": 0, "misses": 0, "pending": 0}
+        assert stats == {"hits": 0, "misses": 0, "auto_approved": 0, "pending": 0}
 
     async def test_get_stats_uses_single_pipeline_round_trip(self):
         pipe = _make_pipeline({}, 0)
@@ -332,3 +332,105 @@ class TestRagCacheStoreStats:
         inner.pipeline = MagicMock(return_value=pipe)
         stats = await RagCacheStore(redis).get_stats()
         assert all(isinstance(v, int) for v in stats.values())
+
+
+# ---------------------------------------------------------------------------
+# search_by_embedding()  — Layer 1 semantic cache lookup
+# ---------------------------------------------------------------------------
+
+class TestRagCacheStoreSearchByEmbedding:
+    _SENTINEL = object()
+
+    def _make_approved_entry(self, query_embedding=_SENTINEL, answer="cached answer") -> CacheEntry:
+        from datetime import datetime, timezone
+        emb = [1.0, 0.0] if query_embedding is self._SENTINEL else query_embedding
+        return CacheEntry(
+            query_hash="deadbeefcafe0001",
+            original_query="what is fastapi?",
+            normalized_query="what is fastapi",
+            chunks=[_make_chunk()],
+            status=CacheStatus.APPROVED,
+            created_at=datetime.now(tz=timezone.utc),
+            query_embedding=emb,
+            answer=answer,
+        )
+
+    async def test_returns_none_when_no_approved_entries(self):
+        redis, inner = _make_redis()
+        inner.scan = AsyncMock(return_value=(0, []))
+        result = await RagCacheStore(redis).search_by_embedding([1.0, 0.0], threshold=0.9)
+        assert result is None
+
+    async def test_returns_entry_when_similarity_above_threshold(self):
+        redis, inner = _make_redis()
+        entry = self._make_approved_entry(query_embedding=[1.0, 0.0])
+        key = "v1:rag_cache:deadbeefcafe0001"
+        pipe = _make_pipeline(entry.model_dump_json())
+        inner.pipeline = MagicMock(return_value=pipe)
+        inner.scan = AsyncMock(return_value=(0, [key.encode()]))
+        result = await RagCacheStore(redis).search_by_embedding([1.0, 0.0], threshold=0.9)
+        assert result is not None
+        assert result.answer == "cached answer"
+
+    async def test_returns_none_when_similarity_below_threshold(self):
+        redis, inner = _make_redis()
+        entry = self._make_approved_entry(query_embedding=[0.0, 1.0])  # orthogonal
+        key = "v1:rag_cache:deadbeefcafe0001"
+        pipe = _make_pipeline(entry.model_dump_json())
+        inner.pipeline = MagicMock(return_value=pipe)
+        inner.scan = AsyncMock(return_value=(0, [key.encode()]))
+        result = await RagCacheStore(redis).search_by_embedding([1.0, 0.0], threshold=0.9)
+        assert result is None
+
+    async def test_skips_entries_without_query_embedding(self):
+        redis, inner = _make_redis()
+        entry = self._make_approved_entry(query_embedding=None)
+        key = "v1:rag_cache:deadbeefcafe0001"
+        pipe = _make_pipeline(entry.model_dump_json())
+        inner.pipeline = MagicMock(return_value=pipe)
+        inner.scan = AsyncMock(return_value=(0, [key.encode()]))
+        result = await RagCacheStore(redis).search_by_embedding([1.0, 0.0], threshold=0.5)
+        assert result is None
+
+    async def test_skips_non_approved_entries(self):
+        redis, inner = _make_redis()
+        from datetime import datetime, timezone
+        entry = CacheEntry(
+            query_hash="deadbeefcafe0002",
+            original_query="q", normalized_query="q",
+            chunks=[_make_chunk()],
+            status=CacheStatus.PENDING_REVIEW,
+            created_at=datetime.now(tz=timezone.utc),
+            query_embedding=[1.0, 0.0],
+            answer="",
+        )
+        key = "v1:rag_cache:deadbeefcafe0002"
+        pipe = _make_pipeline(entry.model_dump_json())
+        inner.pipeline = MagicMock(return_value=pipe)
+        inner.scan = AsyncMock(return_value=(0, [key.encode()]))
+        result = await RagCacheStore(redis).search_by_embedding([1.0, 0.0], threshold=0.5)
+        assert result is None
+
+    async def test_returns_best_match_when_multiple_candidates(self):
+        redis, inner = _make_redis()
+        from datetime import datetime, timezone
+        entry_low = CacheEntry(
+            query_hash="aabbccddeeff0001",
+            original_query="q1", normalized_query="q1",
+            chunks=[_make_chunk()], status=CacheStatus.APPROVED,
+            created_at=datetime.now(tz=timezone.utc),
+            query_embedding=[0.8, 0.6], answer="low match",
+        )
+        entry_high = CacheEntry(
+            query_hash="aabbccddeeff0002",
+            original_query="q2", normalized_query="q2",
+            chunks=[_make_chunk()], status=CacheStatus.APPROVED,
+            created_at=datetime.now(tz=timezone.utc),
+            query_embedding=[1.0, 0.0], answer="high match",
+        )
+        pipe = _make_pipeline(entry_low.model_dump_json(), entry_high.model_dump_json())
+        inner.pipeline = MagicMock(return_value=pipe)
+        inner.scan = AsyncMock(return_value=(0, [b"key1", b"key2"]))
+        result = await RagCacheStore(redis).search_by_embedding([1.0, 0.0], threshold=0.5)
+        assert result is not None
+        assert result.answer == "high match"

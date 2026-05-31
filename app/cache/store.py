@@ -1,5 +1,6 @@
 import logging
 
+from app.cache.quality import cosine_similarity
 from app.cache.schemas import CacheEntry, CacheStatus, validate_transition
 from app.clients.redis import RedisClient
 from app.core.config import Settings, settings as _default_settings
@@ -8,6 +9,7 @@ logger = logging.getLogger(__name__)
 
 _SCAN_COUNT = 100
 _STATS_HASH_KEY = "stats"
+_THRESHOLD_EPSILON = 1e-9  # strict-greater comparison tolerance
 
 
 class RagCacheStore:
@@ -143,5 +145,55 @@ class RagCacheStore:
         return {
             "hits": int(raw_stats.get("hits", 0)),
             "misses": int(raw_stats.get("misses", 0)),
+            "auto_approved": int(raw_stats.get("auto_approved", 0)),
             "pending": int(pending),
         }
+
+    async def search_by_embedding(
+        self,
+        query_embedding: list[float],
+        threshold: float,
+    ) -> "CacheEntry | None":
+        """Scan approved entries and return the best cosine-similarity match.
+
+        Returns None when no entry exceeds the threshold or has a stored
+        query_embedding.  Iterates via SCAN to avoid blocking Redis.
+        """
+        pattern = self._redis.cache_key("rag_cache", "*")
+        best_entry: CacheEntry | None = None
+        best_score: float = threshold - _THRESHOLD_EPSILON
+        cursor = 0
+        while True:
+            cursor, keys = await self._redis.client.scan(
+                cursor, match=pattern, count=_SCAN_COUNT
+            )
+            if keys:
+                pipe = self._redis.client.pipeline()
+                for raw_key in keys:
+                    pipe.get(raw_key)
+                raws = await pipe.execute()
+                for raw in raws:
+                    if raw is None:
+                        continue
+                    try:
+                        entry = CacheEntry.model_validate_json(raw)
+                    except Exception:
+                        continue
+                    if entry.status != CacheStatus.APPROVED:
+                        continue
+                    if not entry.query_embedding:
+                        continue
+                    try:
+                        score = cosine_similarity(query_embedding, entry.query_embedding)
+                    except ValueError:
+                        continue
+                    if score > best_score:
+                        best_score = score
+                        best_entry = entry
+            if cursor == 0:
+                break
+        return best_entry
+
+    async def get_ttl(self, query_hash: str) -> int:
+        """Return the remaining TTL in seconds for a cache entry (-2 if missing)."""
+        return await self._redis.client.ttl(self._entry_key(query_hash))

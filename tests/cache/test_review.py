@@ -198,6 +198,19 @@ class TestReviewQueueApprove:
         assert await queue.approve("deadbeefcafe0000", "r1") == CacheStatus.PENDING_REVIEW
         inner.setex.assert_not_awaited()
 
+    async def test_already_approved_entry_returns_approved_and_cleans_queue(self):
+        """APPROVED entries already in the queue (e.g. auto-approved) are
+        returned as APPROVED and removed from the sorted set without status change."""
+        redis, inner = _make_redis()
+        inner.get = AsyncMock(
+            return_value=_make_entry(status=CacheStatus.APPROVED).model_dump_json()
+        )
+        queue, _ = _make_queue(redis, inner)
+        result = await queue.approve("deadbeefcafe0000", "r1")
+        assert result == CacheStatus.APPROVED
+        inner.setex.assert_not_awaited()   # no status change needed
+        inner.zrem.assert_awaited_once()   # cleaned from pending queue
+
 
 # ---------------------------------------------------------------------------
 # reject() guards
@@ -219,16 +232,18 @@ class TestReviewQueueRejectGuards:
         await queue.reject("deadbeefcafe0000")
         inner.setex.assert_not_awaited()
 
-    async def test_raises_validation_error_for_approved_entry(self):
-        """APPROVED is terminal — APPROVED → REJECTED must raise ValidationError."""
+    async def test_already_approved_entry_just_removed_from_queue(self):
+        """APPROVED entries cannot be rejected (terminal) — they are silently
+        removed from the pending queue without a status change."""
         redis, inner = _make_redis()
         inner.get = AsyncMock(
             return_value=_make_entry(status=CacheStatus.APPROVED).model_dump_json()
         )
         queue, _ = _make_queue(redis, inner)
-        with pytest.raises(ValidationError):
-            await queue.reject("deadbeefcafe0000")
+        await queue.reject("deadbeefcafe0000")
+        # Must not call setex (no status update) — just zrem for cleanup.
         inner.setex.assert_not_awaited()
+        inner.zrem.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

@@ -50,7 +50,7 @@ class TestBuildGraph:
         inner.rpush = AsyncMock()
         redis.client = inner
         cache_svc = MagicMock()
-        cache_svc.get_or_retrieve = AsyncMock(return_value=([chunk], False))
+        cache_svc.get_or_retrieve = AsyncMock(return_value=([chunk], False, "aabb112233440000"))
 
         graph = build_graph(llm=llm, retriever=retriever, redis=redis, cache_svc=cache_svc)
         result = await graph.ainvoke({
@@ -63,6 +63,9 @@ class TestBuildGraph:
             "reranked_chunks": [],
             "answer": "",
             "cache_hit": False,
+            "cached_answer": "",
+            "query_embedding": None,
+            "rag_cache_hash": None,
             "error": None,
         })
 
@@ -70,3 +73,93 @@ class TestBuildGraph:
         cache_svc.get_or_retrieve.assert_awaited_once()
         inner.setex.assert_awaited_once()
         inner.rpush.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# New graph topology: cache_lookup as entry, stream_cached on hit
+# ---------------------------------------------------------------------------
+
+class TestBuildGraphNewTopology:
+    def test_graph_has_cache_lookup_and_stream_cached_nodes(self):
+        graph = build_graph(llm=MagicMock(), retriever=MagicMock(), redis=MagicMock(), cache_svc=MagicMock())
+        node_names = set(graph.get_graph().nodes.keys())
+        assert "cache_lookup" in node_names
+        assert "stream_cached" in node_names
+
+    def test_cache_lookup_is_entry_point(self):
+        graph = build_graph(llm=MagicMock(), retriever=MagicMock(), redis=MagicMock(), cache_svc=MagicMock())
+        edges = graph.get_graph().edges
+        entry_targets = [e.target for e in edges if e.source == "__start__"]
+        assert "cache_lookup" in entry_targets
+
+    async def test_cache_hit_path_skips_llm_rewrite_and_generate(self):
+        from datetime import datetime, timezone
+        from app.cache.schemas import CacheEntry, CacheStatus
+
+        cached_entry = CacheEntry(
+            query_hash="aabb112233440000",
+            original_query="q", normalized_query="q",
+            chunks=[], status=CacheStatus.APPROVED,
+            created_at=datetime.now(tz=timezone.utc),
+            query_embedding=[1.0, 0.0],
+            answer="cached answer here",
+        )
+        llm = MagicMock()
+        llm.embed = AsyncMock(return_value=[1.0, 0.0])
+        llm.complete = AsyncMock()        # query_rewrite — must NOT be called
+        llm.stream_complete = AsyncMock() # generate — must NOT be called
+
+        redis = MagicMock()
+        redis.cache_key = MagicMock(return_value="key")
+        inner = MagicMock()
+        inner.setex = AsyncMock()
+        inner.rpush = AsyncMock()
+        redis.client = inner
+
+        cache_svc = MagicMock()
+        cache_svc.lookup_by_embedding = AsyncMock(return_value=cached_entry)
+
+        graph = build_graph(llm=llm, retriever=MagicMock(), redis=redis, cache_svc=cache_svc)
+        result = await graph.ainvoke({
+            "session_id": "s1", "job_id": "j1", "query": "q",
+            "top_k": 5, "rewritten_query": "", "chunks": [],
+            "reranked_chunks": [], "answer": "", "cache_hit": False,
+            "cached_answer": "", "query_embedding": None, "error": None,
+        })
+
+        assert result["answer"] == "cached answer here"
+        llm.complete.assert_not_awaited()
+        llm.stream_complete.assert_not_called()
+
+    async def test_cache_miss_path_runs_full_pipeline(self):
+        async def _stream(prompt, **kw):
+            yield "generated answer"
+
+        llm = MagicMock()
+        llm.embed = AsyncMock(return_value=[0.1] * 5)
+        llm.complete = AsyncMock(return_value="rewritten query")
+        llm.stream_complete = _stream
+
+        redis = MagicMock()
+        redis.cache_key = MagicMock(return_value="key")
+        inner = MagicMock()
+        inner.setex = AsyncMock()
+        inner.rpush = AsyncMock()
+        redis.client = inner
+
+        chunk = _chunk()
+        cache_svc = MagicMock()
+        cache_svc.lookup_by_embedding = AsyncMock(return_value=None)
+        cache_svc.get_or_retrieve = AsyncMock(return_value=([chunk], False, "aabb112233440000"))
+        cache_svc.save_answer = AsyncMock()
+
+        graph = build_graph(llm=llm, retriever=MagicMock(), redis=redis, cache_svc=cache_svc)
+        result = await graph.ainvoke({
+            "session_id": "s1", "job_id": "j1", "query": "q",
+            "top_k": 5, "rewritten_query": "", "chunks": [],
+            "reranked_chunks": [], "answer": "", "cache_hit": False,
+            "cached_answer": "", "query_embedding": None, "error": None,
+        })
+
+        assert result["answer"] == "generated answer"
+        llm.complete.assert_awaited()  # query_rewrite and rerank both called complete

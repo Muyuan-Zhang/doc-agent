@@ -41,12 +41,15 @@ def _entry(status: CacheStatus = CacheStatus.PENDING_REVIEW) -> CacheEntry:
     )
 
 
-def _stats_pipe(hits: int = 0, misses: int = 0, pending: int = 0):
+def _stats_pipe(hits: int = 0, misses: int = 0, auto_approved: int = 0, pending: int = 0):
     pipe = MagicMock()
     pipe.hgetall = MagicMock(return_value=pipe)
     pipe.zcard = MagicMock(return_value=pipe)
     pipe.execute = AsyncMock(
-        return_value=[{"hits": str(hits), "misses": str(misses)}, pending]
+        return_value=[
+            {"hits": str(hits), "misses": str(misses), "auto_approved": str(auto_approved)},
+            pending,
+        ]
     )
     return pipe
 
@@ -232,7 +235,7 @@ class TestResponseShapeContract:
             r = await c.get("/cache/stats")
 
         body = r.json()
-        assert set(body.keys()) == {"hits", "misses", "pending"}
+        assert set(body.keys()) == {"hits", "misses", "auto_approved", "pending"}
         assert all(isinstance(v, int) for v in body.values())
 
     async def test_approve_response_shape(self):

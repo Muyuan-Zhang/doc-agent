@@ -73,5 +73,33 @@ M3/M6 直接調用，不要重新實現：
 
 多 key 操作需使用 hash tag（`{user:u123}:rate_limit`），避免 Cluster CROSSSLOT 錯誤。
 
+## 前端待實現功能（後端已就緒）
+
+### F0 擴展：文檔管理
+- **刪除文檔**：文件列表每項加刪除按鈕，調用 `DELETE /knowledge-base/documents/{doc_id}`（204），成功後從列表移除
+
+### F3 緩存管理面板（對應 M3）
+後端路由：`app/routers/cache.py`
+- 顯示緩存統計：`GET /cache/stats` → hits / misses / pending 數字展示
+- 待審核列表：`GET /cache/review` → 列出 pending 條目（query 預覽 + query_hash）
+- 審核操作：每條目配 approve / reject 按鈕
+  - `POST /cache/review/{query_hash}/approve`（需 reviewer_id）
+  - `POST /cache/review/{query_hash}/reject`（204）
+- 刪除緩存：`DELETE /cache/{query_hash}`（204）
+- 認證：請求頭帶 `X-API-Key`，值來自 `.env` 的 `CACHE_API_KEY`
+
+### F4 記憶管理面板（對應 M5）
+後端路由：`app/routers/memory.py`
+- 當前會話記憶展示：`GET /memory/context/{session_id}?user_id=` → 顯示 turns + summary + static_facts
+- 手動觸發摘要：`POST /memory/summarize/{session_id}?user_id=` → 壓縮近期對話為長期摘要
+- 靜態知識管理：
+  - 添加：`POST /memory/static`，body `{user_id, content}`
+  - 刪除：`DELETE /memory/static/{fact_id}?user_id=`（204）
+
+### F5 直接檢索調試視圖（對應 M2）
+後端路由：`app/routers/retrieval.py`（`POST /retrieval/search`）
+- 輸入查詢 + top_k，直接返回原始 chunk 列表（不經過 LLM）
+- 用途：調試檢索質量，驗證文檔是否被正確索引
+
 ## ECC 工作流
 單模塊標準流水線：/ecc:plan → /tdd → /code-review → /security-scan → /e2e → merge

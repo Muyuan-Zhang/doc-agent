@@ -406,10 +406,10 @@ async function loadCacheStats() {
     const res = await fetch("/cache/stats");
     if (!res.ok) throw new Error("Failed to fetch stats");
     
-    const { hits, misses, pending } = await res.json();
+    const { hits, misses, auto_approved = 0, pending } = await res.json();
     const total = hits + misses;
     const rate = total > 0 ? ((hits / total) * 100).toFixed(1) : 0;
-    
+
     cacheStats.innerHTML = `
       <div class="stat-item">
         <div class="stat-value">${hits}</div>
@@ -424,6 +424,10 @@ async function loadCacheStats() {
         <div class="stat-label">Hit Rate</div>
       </div>
       <div class="stat-item">
+        <div class="stat-value">${auto_approved}</div>
+        <div class="stat-label">Auto-Approved</div>
+      </div>
+      <div class="stat-item">
         <div class="stat-value">${pending}</div>
         <div class="stat-label">Pending</div>
       </div>
@@ -435,18 +439,20 @@ async function loadCacheStats() {
 }
 
 async function loadCacheReview() {
+  cacheLoadReviewBtn.disabled = true;
+  cacheLoadReviewBtn.textContent = "Loading…";
   try {
     const res = await fetch("/cache/review");
     if (!res.ok) throw new Error("Failed to fetch reviews");
-    
+
     const { pending } = await res.json();
     if (pending.length === 0) {
       cacheReview.innerHTML = "<p>No pending reviews</p>";
       return;
     }
-    
+
     cacheReview.innerHTML = pending.map(item => `
-      <div class="review-item">
+      <div class="review-item" data-hash="${item.query_hash}">
         <div class="review-item-header">
           <div class="review-item-query">${escapeHtml(item.original_query)}</div>
         </div>
@@ -454,86 +460,104 @@ async function loadCacheReview() {
           Normalized: ${escapeHtml(item.normalized_query)} | ${item.chunk_count} chunks | Approvals: ${item.approval_count}
         </div>
         <div class="review-item-actions">
-          <button class="btn-approve" onclick="approveCacheEntry('${item.query_hash}')">Approve</button>
-          <button class="btn-reject" onclick="rejectCacheEntry('${item.query_hash}')">Reject</button>
-          <button class="btn-delete" onclick="deleteCacheEntry('${item.query_hash}')">Delete</button>
+          <input class="reviewer-input" type="text" placeholder="Reviewer ID (for Approve)" />
+          <button class="btn-approve">Approve</button>
+          <button class="btn-reject">Reject</button>
+          <button class="btn-delete">Delete</button>
         </div>
       </div>
     `).join("");
   } catch (err) {
     cacheReview.innerHTML = `<p style="color: red;">Error: ${err.message}</p>`;
     showToast("Failed to load reviews");
+  } finally {
+    cacheLoadReviewBtn.disabled = false;
+    cacheLoadReviewBtn.textContent = "Load Pending";
   }
 }
 
-async function approveCacheEntry(queryHash) {
-  const reviewerId = prompt("Enter your reviewer ID:");
-  if (!reviewerId) return;
-  
-  try {
-    const headers = { "Content-Type": "application/json" };
-    const apiKey = localStorage.getItem("cache_api_key");
-    if (apiKey) headers["X-API-Key"] = apiKey;
-    
-    const res = await fetch(`/cache/review/${queryHash}/approve`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ reviewer_id: reviewerId }),
-    });
-    if (res.ok) {
-      showToast("Entry approved");
-      loadCacheReview();
-    } else {
-      const err = await res.json().catch(() => ({}));
-      showToast("Approval failed: " + (err.detail || res.statusText));
-    }
-  } catch (err) {
-    showToast("Error: " + err.message);
+function _removeReviewItem(queryHash) {
+  const el = cacheReview.querySelector(`[data-hash="${queryHash}"]`);
+  if (el) el.remove();
+  if (!cacheReview.querySelector(".review-item")) {
+    cacheReview.innerHTML = "<p>No pending reviews</p>";
   }
 }
 
-async function rejectCacheEntry(queryHash) {
-  try {
-    const headers = {};
-    const apiKey = localStorage.getItem("cache_api_key");
-    if (apiKey) headers["X-API-Key"] = apiKey;
-    
-    const res = await fetch(`/cache/review/${queryHash}/reject`, {
-      method: "POST",
-      headers,
-    });
-    if (res.ok) {
-      showToast("Entry rejected");
-      loadCacheReview();
-    } else {
-      showToast("Rejection failed: " + res.statusText);
-    }
-  } catch (err) {
-    showToast("Error: " + err.message);
-  }
+function _setItemBusy(queryHash, busy) {
+  const el = cacheReview.querySelector(`[data-hash="${queryHash}"]`);
+  if (!el) return;
+  el.querySelectorAll("button, input").forEach(b => { b.disabled = busy; });
 }
 
-async function deleteCacheEntry(queryHash) {
-  if (!confirm("Delete this cache entry?")) return;
-  try {
-    const headers = {};
-    const apiKey = localStorage.getItem("cache_api_key");
-    if (apiKey) headers["X-API-Key"] = apiKey;
-    
-    const res = await fetch(`/cache/${queryHash}`, {
-      method: "DELETE",
-      headers,
-    });
-    if (res.ok) {
-      showToast("Entry deleted");
-      loadCacheReview();
-    } else {
-      showToast("Delete failed: " + res.statusText);
+cacheReview.addEventListener("click", async (e) => {
+  const item = e.target.closest(".review-item");
+  if (!item) return;
+  const queryHash = item.dataset.hash;
+  const apiKey = localStorage.getItem("cache_api_key");
+
+  if (e.target.classList.contains("btn-approve")) {
+    const reviewerId = item.querySelector(".reviewer-input").value.trim();
+    if (!reviewerId) { showToast("Enter your reviewer ID first"); return; }
+    _setItemBusy(queryHash, true);
+    try {
+      const headers = { "Content-Type": "application/json" };
+      if (apiKey) headers["X-API-Key"] = apiKey;
+      const res = await fetch(`/cache/review/${queryHash}/approve`, {
+        method: "POST", headers,
+        body: JSON.stringify({ reviewer_id: reviewerId }),
+      });
+      if (res.ok) {
+        _removeReviewItem(queryHash);
+        showToast("Entry approved");
+      } else {
+        const body = await res.json().catch(() => ({}));
+        showToast("Approval failed: " + (body.detail || res.statusText));
+        _setItemBusy(queryHash, false);
+      }
+    } catch (err) {
+      showToast("Error: " + err.message);
+      _setItemBusy(queryHash, false);
     }
-  } catch (err) {
-    showToast("Error: " + err.message);
+
+  } else if (e.target.classList.contains("btn-reject")) {
+    _setItemBusy(queryHash, true);
+    try {
+      const headers = {};
+      if (apiKey) headers["X-API-Key"] = apiKey;
+      const res = await fetch(`/cache/review/${queryHash}/reject`, { method: "POST", headers });
+      if (res.ok) {
+        _removeReviewItem(queryHash);
+        showToast("Entry rejected");
+      } else {
+        showToast("Rejection failed: " + res.statusText);
+        _setItemBusy(queryHash, false);
+      }
+    } catch (err) {
+      showToast("Error: " + err.message);
+      _setItemBusy(queryHash, false);
+    }
+
+  } else if (e.target.classList.contains("btn-delete")) {
+    if (!confirm("Delete this cache entry?")) return;
+    _setItemBusy(queryHash, true);
+    try {
+      const headers = {};
+      if (apiKey) headers["X-API-Key"] = apiKey;
+      const res = await fetch(`/cache/${queryHash}`, { method: "DELETE", headers });
+      if (res.ok) {
+        _removeReviewItem(queryHash);
+        showToast("Entry deleted");
+      } else {
+        showToast("Delete failed: " + res.statusText);
+        _setItemBusy(queryHash, false);
+      }
+    } catch (err) {
+      showToast("Error: " + err.message);
+      _setItemBusy(queryHash, false);
+    }
   }
-}
+});
 
 cacheRefreshStatsBtn.addEventListener("click", loadCacheStats);
 cacheLoadReviewBtn.addEventListener("click", loadCacheReview);
@@ -553,14 +577,14 @@ async function loadMemoryContext() {
     if (!res.ok) throw new Error("Failed to fetch context");
     
     const ctx = await res.json();
-    let html = `<h4>Recent Turns: ${ctx.recent_turns?.length || 0}</h4>`;
-    
-    if (ctx.recent_turns?.length > 0) {
-      html += "<pre>" + escapeHtml(JSON.stringify(ctx.recent_turns, null, 2)) + "</pre>";
+    let html = `<h4>Recent Turns: ${ctx.turns?.length || 0}</h4>`;
+
+    if (ctx.turns?.length > 0) {
+      html += "<pre>" + escapeHtml(JSON.stringify(ctx.turns, null, 2)) + "</pre>";
     }
     
     if (ctx.summary) {
-      html += `<h4 style="margin-top: 12px;">Summary</h4><pre>${escapeHtml(ctx.summary)}</pre>`;
+      html += `<h4 style="margin-top: 12px;">Summary</h4><pre>${escapeHtml(ctx.summary.summary_text || JSON.stringify(ctx.summary))}</pre>`;
     }
     
     if (ctx.static_facts?.length > 0) {
@@ -631,7 +655,7 @@ async function loadStaticFacts() {
     memoryFacts.innerHTML = facts.map(fact => `
       <div class="fact-item">
         <div class="fact-content">${escapeHtml(fact.content)}</div>
-        <button class="fact-delete" onclick="deleteStaticFact('${fact.id}')">Delete</button>
+        <button class="fact-delete" onclick="deleteStaticFact('${fact.fact_id}')">Delete</button>
       </div>
     `).join("");
   } catch (err) {
