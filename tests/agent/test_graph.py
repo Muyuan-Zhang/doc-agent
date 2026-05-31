@@ -222,25 +222,7 @@ class TestLayer2ChunkHitSkipsRerank:
         chunk = _chunk()
         cache_svc = MagicMock()
         cache_svc.lookup_by_embedding = AsyncMock(return_value=None)
-        cache_svc.get_or_retrieve = AsyncMock(return_value=([chunk], False, "aabb112233440000"))
-        cache_svc.save_answer = AsyncMock()
-
-        memory_ctx = MemoryContext(
-            turns=[
-                ConversationTurn(session_id="s1", role="user", content="I like conciseness.", ts=1.0),
-            ],
-            summary=None,
-            static_facts=[],
-        )
-        memory_svc = MagicMock()
-        memory_svc.retrieve_context = AsyncMock(return_value=memory_ctx)
-
-        graph = build_graph(
-            llm=llm, retriever=MagicMock(), redis=redis,
-            cache_svc=cache_svc, memory_svc=memory_svc,
-        )
-        cache_svc.lookup_by_embedding = AsyncMock(return_value=None)  # Layer 1 miss
-        # Layer 2 hit: returns chunks, cache_hit=True
+        # Layer 2 hit: get_or_retrieve returns chunk_cache_hit=True
         cache_svc.get_or_retrieve = AsyncMock(return_value=([chunk], True, "aabb112233440000"))
         cache_svc.save_answer = AsyncMock()
 
@@ -251,19 +233,12 @@ class TestLayer2ChunkHitSkipsRerank:
             "reranked_chunks": [], "answer": "", "cache_hit": False,
             "cached_answer": "", "query_embedding": None,
             "rag_cache_hash": None, "error": None,
-            "user_id": "u1", "memory_context": None,
-        })
-
-        assert result["answer"] == "memory-aware answer"
-        # Memory service should have been called
-        memory_svc.retrieve_context.assert_awaited_once_with(
-            "s1", "u1", query_embedding=[0.1] * 5,
-        )
-            "cached_answer": "", "query_embedding": None, "rag_cache_hash": None,
-            "chunk_cache_hit": False, "error": None,
+            "user_id": "", "memory_context": None,
+            "chunk_cache_hit": False,
         })
 
         assert result["answer"] == "chunk-cached answer"
+        # Must NOT call llm.complete for rerank — it's bypassed on chunk cache hit
         assert llm.complete.await_count <= 1, (
             f"rerank must be skipped on chunk cache hit; llm.complete called {llm.complete.await_count} times"
         )

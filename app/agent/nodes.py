@@ -136,16 +136,14 @@ async def retrieval(state: AgentState, *, llm, retriever, redis, cache_svc) -> d
     t0 = time.perf_counter()
     logger.info("retrieval=enter job=%s rewritten=%.120s top_k=%d", job_id, rewritten, tk)
 
-    chunks, cache_hit, query_hash = await cache_svc.get_or_retrieve(
+    chunks, chunk_cache_hit, query_hash = await cache_svc.get_or_retrieve(
         rewritten, retriever, top_k=tk,
     )
 
     elapsed = time.perf_counter() - t0
     logger.info(
-        "retrieval=done job=%s chunks=%d cache_hit=%s hash=%s elapsed=%.3fs",
-        job_id, len(chunks), cache_hit, query_hash, elapsed,
-    chunks, chunk_cache_hit, query_hash = await cache_svc.get_or_retrieve(
-        state["rewritten_query"], retriever, top_k=state["top_k"],
+        "retrieval=done job=%s chunks=%d chunk_cache_hit=%s hash=%s elapsed=%.3fs",
+        job_id, len(chunks), chunk_cache_hit, query_hash, elapsed,
     )
     return {"chunks": chunks, "chunk_cache_hit": chunk_cache_hit, "rag_cache_hash": query_hash}
 

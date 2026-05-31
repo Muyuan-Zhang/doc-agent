@@ -287,6 +287,17 @@ class TestAddStaticFactEndpoint:
             r = await c.post("/memory/static", json={"user_id": "u1", "content": "x" * 32769})
         assert r.status_code == 422
 
+    async def test_returns_500_when_embed_fails(self):
+        from unittest.mock import AsyncMock
+        app, redis, pg, milvus, llm = _app_with_memory()
+        llm.embed = AsyncMock(side_effect=RuntimeError("embedding service unavailable"))
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post("/memory/static", json={
+                "user_id": "user-1",
+                "content": "A fact that cannot be embedded.",
+            })
+        assert r.status_code == 500
+
 
 # ---------------------------------------------------------------------------
 # DELETE /memory/static/{fact_id}
