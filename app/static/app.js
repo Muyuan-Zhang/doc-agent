@@ -577,14 +577,14 @@ async function loadMemoryContext() {
     if (!res.ok) throw new Error("Failed to fetch context");
     
     const ctx = await res.json();
-    let html = `<h4>Recent Turns: ${ctx.recent_turns?.length || 0}</h4>`;
-    
-    if (ctx.recent_turns?.length > 0) {
-      html += "<pre>" + escapeHtml(JSON.stringify(ctx.recent_turns, null, 2)) + "</pre>";
+    let html = `<h4>Recent Turns: ${ctx.turns?.length || 0}</h4>`;
+
+    if (ctx.turns?.length > 0) {
+      html += "<pre>" + escapeHtml(JSON.stringify(ctx.turns, null, 2)) + "</pre>";
     }
     
     if (ctx.summary) {
-      html += `<h4 style="margin-top: 12px;">Summary</h4><pre>${escapeHtml(ctx.summary)}</pre>`;
+      html += `<h4 style="margin-top: 12px;">Summary</h4><pre>${escapeHtml(ctx.summary.summary_text || JSON.stringify(ctx.summary))}</pre>`;
     }
     
     if (ctx.static_facts?.length > 0) {
@@ -655,7 +655,7 @@ async function loadStaticFacts() {
     memoryFacts.innerHTML = facts.map(fact => `
       <div class="fact-item">
         <div class="fact-content">${escapeHtml(fact.content)}</div>
-        <button class="fact-delete" onclick="deleteStaticFact('${fact.id}')">Delete</button>
+        <button class="fact-delete" onclick="deleteStaticFact('${fact.fact_id}')">Delete</button>
       </div>
     `).join("");
   } catch (err) {
