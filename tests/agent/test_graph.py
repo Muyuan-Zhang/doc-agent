@@ -63,6 +63,7 @@ class TestBuildGraph:
             "reranked_chunks": [],
             "answer": "",
             "cache_hit": False,
+            "chunk_cache_hit": False,
             "cached_answer": "",
             "query_embedding": None,
             "rag_cache_hash": None,
@@ -124,7 +125,7 @@ class TestBuildGraphNewTopology:
             "session_id": "s1", "job_id": "j1", "query": "q",
             "top_k": 5, "rewritten_query": "", "chunks": [],
             "reranked_chunks": [], "answer": "", "cache_hit": False,
-            "cached_answer": "", "query_embedding": None, "error": None,
+            "chunk_cache_hit": False, "cached_answer": "", "query_embedding": None, "error": None,
         })
 
         assert result["answer"] == "cached answer here"
@@ -158,8 +159,53 @@ class TestBuildGraphNewTopology:
             "session_id": "s1", "job_id": "j1", "query": "q",
             "top_k": 5, "rewritten_query": "", "chunks": [],
             "reranked_chunks": [], "answer": "", "cache_hit": False,
-            "cached_answer": "", "query_embedding": None, "error": None,
+            "chunk_cache_hit": False, "cached_answer": "", "query_embedding": None, "error": None,
         })
 
         assert result["answer"] == "generated answer"
         llm.complete.assert_awaited()  # query_rewrite and rerank both called complete
+
+
+# ---------------------------------------------------------------------------
+# Bug 1 fix: Layer 2 chunk hit skips entity_extraction and rerank
+# ---------------------------------------------------------------------------
+
+class TestLayer2ChunkHitSkipsRerank:
+    async def test_chunk_cache_hit_skips_entity_extraction_and_rerank(self):
+        """When Layer 2 chunk cache hits, entity_extraction and rerank must be bypassed."""
+        async def _stream(prompt, **kw):
+            yield "chunk-cached answer"
+
+        llm = MagicMock()
+        llm.embed = AsyncMock(return_value=[0.1] * 5)
+        llm.complete = AsyncMock(return_value="rewritten query")
+        llm.stream_complete = _stream
+
+        redis = MagicMock()
+        redis.cache_key = MagicMock(return_value="key")
+        inner = MagicMock()
+        inner.setex = AsyncMock()
+        inner.rpush = AsyncMock()
+        redis.client = inner
+
+        chunk = _chunk()
+        cache_svc = MagicMock()
+        cache_svc.lookup_by_embedding = AsyncMock(return_value=None)  # Layer 1 miss
+        # Layer 2 hit: returns chunks, cache_hit=True
+        cache_svc.get_or_retrieve = AsyncMock(return_value=([chunk], True, "aabb112233440000"))
+        cache_svc.save_answer = AsyncMock()
+
+        graph = build_graph(llm=llm, retriever=MagicMock(), redis=redis, cache_svc=cache_svc)
+        result = await graph.ainvoke({
+            "session_id": "s1", "job_id": "j1", "query": "q",
+            "top_k": 5, "rewritten_query": "", "chunks": [],
+            "reranked_chunks": [], "answer": "", "cache_hit": False,
+            "cached_answer": "", "query_embedding": None, "rag_cache_hash": None,
+            "chunk_cache_hit": False, "error": None,
+        })
+
+        assert result["answer"] == "chunk-cached answer"
+        assert llm.complete.await_count <= 1, (
+            f"rerank must be skipped on chunk cache hit; llm.complete called {llm.complete.await_count} times"
+        )
+        cache_svc.save_answer.assert_not_awaited()

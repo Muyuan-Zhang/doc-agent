@@ -15,6 +15,7 @@ class AgentState(TypedDict):
     reranked_chunks: list[ChunkSchema]
     answer: str
     cache_hit: bool
+    chunk_cache_hit: bool
     cached_answer: str
     query_embedding: Optional[list[float]]
     rag_cache_hash: Optional[str]
