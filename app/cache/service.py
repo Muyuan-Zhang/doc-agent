@@ -41,15 +41,20 @@ class RagCacheService:
         query: str,
         retriever: RetrievalStrategy,
         top_k: int = 5,
-    ) -> tuple[list[ChunkSchema], bool]:
-        """Return (chunks, cache_hit). cache_hit=True means served from approved cache."""
+    ) -> tuple[list[ChunkSchema], bool, str]:
+        """Return (chunks, cache_hit, query_hash).
+
+        query_hash is the normalized hash used to key this entry — callers that
+        need to write back (e.g. save_answer) should use this value rather than
+        recomputing it from the raw query string.
+        """
         normalized, query_hash = await self._rewriter.rewrite(query)
         entry = await self._store.get(query_hash)
 
         if entry is not None and entry.status == CacheStatus.APPROVED:
             await self._inc_stat("hits")
             logger.info("cache=hit hash=%s", query_hash)
-            return list(entry.chunks), True
+            return list(entry.chunks), True, query_hash
 
         await self._inc_stat("misses")
         logger.info(
@@ -74,7 +79,7 @@ class RagCacheService:
             elif status == CacheStatus.APPROVED:
                 await self._inc_stat("auto_approved")
 
-        return chunks, False
+        return chunks, False, query_hash
 
     async def lookup_by_embedding(
         self,
@@ -95,7 +100,7 @@ class RagCacheService:
         if entry is None:
             return
         updated = entry.model_copy(update={"answer": answer, "query_embedding": query_embedding})
-        ttl = await self._store._redis.client.ttl(self._store._entry_key(query_hash))
+        ttl = await self._store.get_ttl(query_hash)
         await self._store.set(updated, ttl if ttl > 0 else self._cfg.cache_ttl_seconds)
 
     async def _decide_status(

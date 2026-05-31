@@ -365,8 +365,9 @@ class TestRagCacheStoreSearchByEmbedding:
         redis, inner = _make_redis()
         entry = self._make_approved_entry(query_embedding=[1.0, 0.0])
         key = "v1:rag_cache:deadbeefcafe0001"
+        pipe = _make_pipeline(entry.model_dump_json())
+        inner.pipeline = MagicMock(return_value=pipe)
         inner.scan = AsyncMock(return_value=(0, [key.encode()]))
-        inner.get = AsyncMock(return_value=entry.model_dump_json())
         result = await RagCacheStore(redis).search_by_embedding([1.0, 0.0], threshold=0.9)
         assert result is not None
         assert result.answer == "cached answer"
@@ -375,8 +376,9 @@ class TestRagCacheStoreSearchByEmbedding:
         redis, inner = _make_redis()
         entry = self._make_approved_entry(query_embedding=[0.0, 1.0])  # orthogonal
         key = "v1:rag_cache:deadbeefcafe0001"
+        pipe = _make_pipeline(entry.model_dump_json())
+        inner.pipeline = MagicMock(return_value=pipe)
         inner.scan = AsyncMock(return_value=(0, [key.encode()]))
-        inner.get = AsyncMock(return_value=entry.model_dump_json())
         result = await RagCacheStore(redis).search_by_embedding([1.0, 0.0], threshold=0.9)
         assert result is None
 
@@ -384,8 +386,9 @@ class TestRagCacheStoreSearchByEmbedding:
         redis, inner = _make_redis()
         entry = self._make_approved_entry(query_embedding=None)
         key = "v1:rag_cache:deadbeefcafe0001"
+        pipe = _make_pipeline(entry.model_dump_json())
+        inner.pipeline = MagicMock(return_value=pipe)
         inner.scan = AsyncMock(return_value=(0, [key.encode()]))
-        inner.get = AsyncMock(return_value=entry.model_dump_json())
         result = await RagCacheStore(redis).search_by_embedding([1.0, 0.0], threshold=0.5)
         assert result is None
 
@@ -402,8 +405,9 @@ class TestRagCacheStoreSearchByEmbedding:
             answer="",
         )
         key = "v1:rag_cache:deadbeefcafe0002"
+        pipe = _make_pipeline(entry.model_dump_json())
+        inner.pipeline = MagicMock(return_value=pipe)
         inner.scan = AsyncMock(return_value=(0, [key.encode()]))
-        inner.get = AsyncMock(return_value=entry.model_dump_json())
         result = await RagCacheStore(redis).search_by_embedding([1.0, 0.0], threshold=0.5)
         assert result is None
 
@@ -424,11 +428,9 @@ class TestRagCacheStoreSearchByEmbedding:
             created_at=datetime.now(tz=timezone.utc),
             query_embedding=[1.0, 0.0], answer="high match",
         )
+        pipe = _make_pipeline(entry_low.model_dump_json(), entry_high.model_dump_json())
+        inner.pipeline = MagicMock(return_value=pipe)
         inner.scan = AsyncMock(return_value=(0, [b"key1", b"key2"]))
-        inner.get = AsyncMock(side_effect=[
-            entry_low.model_dump_json(),
-            entry_high.model_dump_json(),
-        ])
         result = await RagCacheStore(redis).search_by_embedding([1.0, 0.0], threshold=0.5)
         assert result is not None
         assert result.answer == "high match"

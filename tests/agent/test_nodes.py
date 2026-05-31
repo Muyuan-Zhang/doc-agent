@@ -87,7 +87,7 @@ class TestRetrieval:
     async def test_fills_chunks_from_cache_svc(self):
         chunk = _chunk()
         cache_svc = MagicMock()
-        cache_svc.get_or_retrieve = AsyncMock(return_value=([chunk], False))
+        cache_svc.get_or_retrieve = AsyncMock(return_value=([chunk], False, "aabb112233440000"))
         retriever = MagicMock()
         state = _state(rewritten_query="fastapi intro", top_k=3)
 
@@ -99,7 +99,7 @@ class TestRetrieval:
 
     async def test_returns_empty_list_when_nothing_found(self):
         cache_svc = MagicMock()
-        cache_svc.get_or_retrieve = AsyncMock(return_value=([], False))
+        cache_svc.get_or_retrieve = AsyncMock(return_value=([], False, "aabb112233440000"))
         retriever = MagicMock()
         state = _state(rewritten_query="obscure topic")
 
@@ -109,7 +109,7 @@ class TestRetrieval:
 
     async def test_uses_rewritten_query_not_original(self):
         cache_svc = MagicMock()
-        cache_svc.get_or_retrieve = AsyncMock(return_value=([], False))
+        cache_svc.get_or_retrieve = AsyncMock(return_value=([], False, "aabb112233440000"))
         retriever = MagicMock()
         state = _state(query="original query", rewritten_query="better query")
 
@@ -120,7 +120,7 @@ class TestRetrieval:
     async def test_cache_hit_flag_is_true_on_hit(self):
         chunk = _chunk()
         cache_svc = MagicMock()
-        cache_svc.get_or_retrieve = AsyncMock(return_value=([chunk], True))
+        cache_svc.get_or_retrieve = AsyncMock(return_value=([chunk], True, "aabb112233440000"))
         retriever = MagicMock()
         state = _state(rewritten_query="cached query")
 
@@ -446,6 +446,7 @@ class TestGenerateSavesAnswer:
             reranked_chunks=[chunk],
             query="test q",
             query_embedding=[1.0, 0.0],
+            rag_cache_hash="deadbeef00000000",
         )
 
         await generate(state, llm=llm, retriever=None, redis=redis, cache_svc=cache_svc)

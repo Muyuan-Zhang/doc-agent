@@ -17,4 +17,5 @@ class AgentState(TypedDict):
     cache_hit: bool
     cached_answer: str
     query_embedding: Optional[list[float]]
+    rag_cache_hash: Optional[str]
     error: Optional[str]

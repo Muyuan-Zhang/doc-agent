@@ -50,7 +50,7 @@ class TestBuildGraph:
         inner.rpush = AsyncMock()
         redis.client = inner
         cache_svc = MagicMock()
-        cache_svc.get_or_retrieve = AsyncMock(return_value=([chunk], False))
+        cache_svc.get_or_retrieve = AsyncMock(return_value=([chunk], False, "aabb112233440000"))
 
         graph = build_graph(llm=llm, retriever=retriever, redis=redis, cache_svc=cache_svc)
         result = await graph.ainvoke({
@@ -63,6 +63,9 @@ class TestBuildGraph:
             "reranked_chunks": [],
             "answer": "",
             "cache_hit": False,
+            "cached_answer": "",
+            "query_embedding": None,
+            "rag_cache_hash": None,
             "error": None,
         })
 
@@ -147,7 +150,7 @@ class TestBuildGraphNewTopology:
         chunk = _chunk()
         cache_svc = MagicMock()
         cache_svc.lookup_by_embedding = AsyncMock(return_value=None)
-        cache_svc.get_or_retrieve = AsyncMock(return_value=([chunk], False))
+        cache_svc.get_or_retrieve = AsyncMock(return_value=([chunk], False, "aabb112233440000"))
         cache_svc.save_answer = AsyncMock()
 
         graph = build_graph(llm=llm, retriever=MagicMock(), redis=redis, cache_svc=cache_svc)

@@ -27,21 +27,22 @@ async def cache_lookup(state: AgentState, *, llm, retriever, redis, cache_svc) -
         return {"cache_hit": False, "cached_answer": "", "query_embedding": None}
 
     hit = await cache_svc.lookup_by_embedding(embedding, threshold=settings.cache_semantic_threshold)
-    if hit is not None:
+    if hit is not None and hit.answer:
         logger.info("cache_lookup=hit hash=%s", hit.query_hash)
-        return {"cache_hit": True, "cached_answer": hit.answer, "query_embedding": embedding}
+        return {"cache_hit": True, "cached_answer": hit.answer, "query_embedding": embedding, "rag_cache_hash": hit.query_hash}
 
-    return {"cache_hit": False, "cached_answer": "", "query_embedding": embedding}
+    return {"cache_hit": False, "cached_answer": "", "query_embedding": embedding, "rag_cache_hash": None}
 
 
 async def stream_cached(state: AgentState, *, llm, retriever, redis, cache_svc) -> dict:
     """Push a cached answer token-by-token to the Redis stream without calling LLM."""
     stream_key = token_stream_key(state["job_id"])
     answer = state["cached_answer"]
-    words = answer.split(" ")
-    for i, word in enumerate(words):
-        token = word if i == len(words) - 1 else word + " "
-        await redis.client.rpush(stream_key, token)
+    if answer:
+        words = answer.split(" ")
+        for i, word in enumerate(words):
+            token = word if i == len(words) - 1 else word + " "
+            await redis.client.rpush(stream_key, token)
     return {"answer": answer}
 
 
@@ -56,10 +57,10 @@ async def query_rewrite(state: AgentState, *, llm, retriever, redis, cache_svc) 
 
 
 async def retrieval(state: AgentState, *, llm, retriever, redis, cache_svc) -> dict:
-    chunks, cache_hit = await cache_svc.get_or_retrieve(
+    chunks, cache_hit, query_hash = await cache_svc.get_or_retrieve(
         state["rewritten_query"], retriever, top_k=state["top_k"],
     )
-    return {"chunks": chunks, "cache_hit": cache_hit}
+    return {"chunks": chunks, "cache_hit": cache_hit, "rag_cache_hash": query_hash}
 
 
 async def entity_extraction(state: AgentState, *, llm, retriever, redis, cache_svc) -> dict:
@@ -116,10 +117,10 @@ async def generate(state: AgentState, *, llm, retriever, redis, cache_svc) -> di
     answer = "".join(tokens)
 
     query_embedding = state.get("query_embedding")
-    if query_embedding and cache_svc is not None:
-        query_hash = hashlib.sha256(state["query"].encode()).hexdigest()[:16]
+    rag_cache_hash = state.get("rag_cache_hash")
+    if query_embedding and rag_cache_hash and cache_svc is not None:
         try:
-            await cache_svc.save_answer(query_hash, answer, query_embedding)
+            await cache_svc.save_answer(rag_cache_hash, answer, query_embedding)
         except Exception as exc:
             logger.warning("generate=save_answer_failed error=%s", exc)
 

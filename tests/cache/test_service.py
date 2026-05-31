@@ -96,7 +96,7 @@ class TestRagCacheServiceApprovedHit:
         inner.get = AsyncMock(return_value=_make_cache_entry(CacheStatus.APPROVED).model_dump_json())
         svc = RagCacheService(redis, _make_llm(), _make_cfg())
         retriever = _make_retriever()
-        chunks, hit = await svc.get_or_retrieve("test query", retriever)
+        chunks, hit, _ = await svc.get_or_retrieve("test query", retriever)
         assert hit is True
         retriever.retrieve.assert_not_awaited()
 
@@ -109,7 +109,7 @@ class TestRagCacheServiceApprovedHit:
         )
         inner.get = AsyncMock(return_value=entry.model_dump_json())
         svc = RagCacheService(redis, _make_llm(), _make_cfg())
-        chunks, hit = await svc.get_or_retrieve("test query", _make_retriever())
+        chunks, hit, _ = await svc.get_or_retrieve("test query", _make_retriever())
         assert hit is True
         assert chunks[0].content == "cached text"
 
@@ -141,7 +141,7 @@ class TestRagCacheServiceMiss:
         redis, inner = _make_redis()
         cfg = _make_cfg(cache_auto_approve=False)
         retriever = _make_retriever()
-        chunks, hit = await RagCacheService(redis, _make_llm(), cfg).get_or_retrieve(
+        chunks, hit, _ = await RagCacheService(redis, _make_llm(), cfg).get_or_retrieve(
             "test query", retriever
         )
         assert hit is False
@@ -169,7 +169,7 @@ class TestRagCacheServiceMiss:
         redis, inner = _make_redis()
         cfg = _make_cfg(cache_auto_approve=False)
         retrieved = [_make_chunk("retrieved text")]
-        chunks, _ = await RagCacheService(redis, _make_llm(), cfg).get_or_retrieve(
+        chunks, _, _ = await RagCacheService(redis, _make_llm(), cfg).get_or_retrieve(
             "test query", _make_retriever(retrieved)
         )
         assert chunks[0].content == "retrieved text"
@@ -211,7 +211,7 @@ class TestRagCacheServicePendingBypass:
             return_value=_make_cache_entry(CacheStatus.PENDING_REVIEW).model_dump_json()
         )
         retriever = _make_retriever()
-        _, hit = await RagCacheService(redis, _make_llm(), _make_cfg()).get_or_retrieve(
+        _, hit, _ = await RagCacheService(redis, _make_llm(), _make_cfg()).get_or_retrieve(
             "test query", retriever
         )
         assert hit is False
@@ -249,7 +249,7 @@ class TestRagCacheServiceRejectedBypass:
             return_value=_make_cache_entry(CacheStatus.REJECTED).model_dump_json()
         )
         retriever = _make_retriever()
-        _, hit = await RagCacheService(redis, _make_llm(), _make_cfg()).get_or_retrieve(
+        _, hit, _ = await RagCacheService(redis, _make_llm(), _make_cfg()).get_or_retrieve(
             "test query", retriever
         )
         assert hit is False
@@ -295,7 +295,7 @@ class TestRagCacheServiceAutoApprove:
         # First call: miss, store as APPROVED
         inner.get = AsyncMock(return_value=None)  # first miss
         retriever = _make_retriever()
-        chunks1, hit1 = await RagCacheService(redis, _make_llm(), cfg).get_or_retrieve(
+        chunks1, hit1, _ = await RagCacheService(redis, _make_llm(), cfg).get_or_retrieve(
             "test query", retriever
         )
         assert hit1 is False
@@ -303,7 +303,7 @@ class TestRagCacheServiceAutoApprove:
         # Second call: should be APPROVED hit
         stored_json = inner.setex.call_args.args[2]
         inner.get = AsyncMock(return_value=stored_json)
-        chunks2, hit2 = await RagCacheService(redis, _make_llm(), cfg).get_or_retrieve(
+        chunks2, hit2, _ = await RagCacheService(redis, _make_llm(), cfg).get_or_retrieve(
             "test query", retriever
         )
         assert hit2 is True
@@ -382,7 +382,7 @@ class TestRagCacheServiceStatResilience:
     async def test_hincrby_failure_does_not_propagate(self):
         redis, inner = _make_redis()
         inner.hincrby = AsyncMock(side_effect=ConnectionError("Redis down"))
-        chunks, hit = await RagCacheService(redis, _make_llm(), _make_cfg()).get_or_retrieve(
+        chunks, hit, _ = await RagCacheService(redis, _make_llm(), _make_cfg()).get_or_retrieve(
             "test query", _make_retriever()
         )
         assert hit is False
