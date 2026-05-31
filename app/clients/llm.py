@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from abc import abstractmethod
 from typing import AsyncIterator
 
@@ -72,16 +73,25 @@ class OpenAILLMClient(AbstractLLMClient):
 
     async def complete(self, prompt: str, **kwargs) -> str:
         max_tokens = kwargs.get("max_tokens", 512)
+        t0 = time.perf_counter()
         async with self._interactive_sem:
             resp = await self._client.chat.completions.create(
                 model=settings.openai_chat_model,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=max_tokens,
             )
-            return resp.choices[0].message.content or ""
+        result = resp.choices[0].message.content or ""
+        elapsed = time.perf_counter() - t0
+        logger.info(
+            "llm=complete model=%s prompt_len=%d result_len=%d elapsed=%.3fs",
+            settings.openai_chat_model, len(prompt), len(result), elapsed,
+        )
+        return result
 
     async def stream_complete(self, prompt: str, **kwargs) -> AsyncIterator[str]:
         max_tokens = kwargs.get("max_tokens", 512)
+        t0 = time.perf_counter()
+        token_count = 0
         async with self._interactive_sem:
             async with await self._client.chat.completions.create(
                 model=settings.openai_chat_model,
@@ -92,22 +102,36 @@ class OpenAILLMClient(AbstractLLMClient):
                 async for chunk in stream:
                     content = chunk.choices[0].delta.content
                     if content:
+                        token_count += 1
                         yield content
+        elapsed = time.perf_counter() - t0
+        logger.info(
+            "llm=stream_complete model=%s prompt_len=%d tokens=%d elapsed=%.3fs",
+            settings.openai_chat_model, len(prompt), token_count, elapsed,
+        )
 
     async def embed(self, text: str) -> list[float]:
+        t0 = time.perf_counter()
         async with self._background_sem:
             resp = await self._client.embeddings.create(
                 input=[text],
                 model=settings.openai_embedding_model,
             )
-            return resp.data[0].embedding
+        result = resp.data[0].embedding
+        elapsed = time.perf_counter() - t0
+        logger.debug("llm=embed model=%s text_len=%d dim=%d elapsed=%.3fs", settings.openai_embedding_model, len(text), len(result), elapsed)
+        return result
 
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
+        t0 = time.perf_counter()
         async with self._background_sem:
             resp = await self._client.embeddings.create(
                 input=texts,
                 model=settings.openai_embedding_model,
             )
-            return [item.embedding for item in sorted(resp.data, key=lambda x: x.index)]
+        result = [item.embedding for item in sorted(resp.data, key=lambda x: x.index)]
+        elapsed = time.perf_counter() - t0
+        logger.info("llm=embed_batch model=%s batch_size=%d elapsed=%.3fs", settings.openai_embedding_model, len(texts), elapsed)
+        return result
