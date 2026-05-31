@@ -118,7 +118,7 @@ async def generate(state: AgentState, *, llm, retriever, redis, cache_svc) -> di
 
     query_embedding = state.get("query_embedding")
     rag_cache_hash = state.get("rag_cache_hash")
-    if query_embedding and rag_cache_hash and cache_svc is not None:
+    if query_embedding and rag_cache_hash and cache_svc is not None and not state.get("chunk_cache_hit"):
         try:
             await cache_svc.save_answer(rag_cache_hash, answer, query_embedding)
         except Exception as exc:

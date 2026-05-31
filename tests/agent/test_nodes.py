@@ -492,3 +492,22 @@ class TestGenerateSavesAnswer:
         await generate(state, llm=llm, retriever=None, redis=redis, cache_svc=cache_svc)
 
         cache_svc.save_answer.assert_not_awaited()
+
+    async def test_save_answer_not_called_on_chunk_cache_hit(self):
+        chunk = _chunk(content="cached chunk")
+        llm = MagicMock()
+        llm.stream_complete = _make_stream(["answer"])
+        redis = _make_redis_for_generate()
+        cache_svc = MagicMock()
+        cache_svc.save_answer = AsyncMock()
+        state = _state(
+            chunks=[chunk],
+            query="q",
+            query_embedding=[1.0, 0.0],
+            rag_cache_hash="deadbeef00000000",
+            chunk_cache_hit=True,
+        )
+
+        await generate(state, llm=llm, retriever=None, redis=redis, cache_svc=cache_svc)
+
+        cache_svc.save_answer.assert_not_awaited()

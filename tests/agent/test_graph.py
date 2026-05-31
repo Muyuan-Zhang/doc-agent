@@ -205,8 +205,7 @@ class TestLayer2ChunkHitSkipsRerank:
         })
 
         assert result["answer"] == "chunk-cached answer"
-        # rerank calls llm.complete for ranking; on chunk hit it must NOT be called for reranking
-        # query_rewrite also calls llm.complete once; so at most 1 call is acceptable
         assert llm.complete.await_count <= 1, (
             f"rerank must be skipped on chunk cache hit; llm.complete called {llm.complete.await_count} times"
         )
+        cache_svc.save_answer.assert_not_awaited()
