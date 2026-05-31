@@ -56,6 +56,9 @@ def build_graph(llm, retriever, redis, cache_svc, memory_svc=None):
         logger.info("graph=route job=%s from=cache_lookup to=%s cache_hit=%s", state.get("job_id"), decision, state["cache_hit"])
         return decision
 
+    def _after_retrieval(state: AgentState) -> str:
+        return "generate" if state["chunk_cache_hit"] else "entity_extraction"
+
     g.set_entry_point("cache_lookup")
 
     if memory_svc is not None:
@@ -68,7 +71,7 @@ def build_graph(llm, retriever, redis, cache_svc, memory_svc=None):
 
     g.add_edge("stream_cached",     "cache_write")
     g.add_edge("query_rewrite",     "retrieval")
-    g.add_edge("retrieval",         "entity_extraction")
+    g.add_conditional_edges("retrieval", _after_retrieval, ["generate", "entity_extraction"])
     g.add_edge("entity_extraction", "rerank")
     g.add_edge("rerank",            "generate")
     g.add_edge("generate",          "cache_write")

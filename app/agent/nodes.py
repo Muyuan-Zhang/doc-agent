@@ -144,8 +144,10 @@ async def retrieval(state: AgentState, *, llm, retriever, redis, cache_svc) -> d
     logger.info(
         "retrieval=done job=%s chunks=%d cache_hit=%s hash=%s elapsed=%.3fs",
         job_id, len(chunks), cache_hit, query_hash, elapsed,
+    chunks, chunk_cache_hit, query_hash = await cache_svc.get_or_retrieve(
+        state["rewritten_query"], retriever, top_k=state["top_k"],
     )
-    return {"chunks": chunks, "cache_hit": cache_hit, "rag_cache_hash": query_hash}
+    return {"chunks": chunks, "chunk_cache_hit": chunk_cache_hit, "rag_cache_hash": query_hash}
 
 
 async def entity_extraction(state: AgentState, *, llm, retriever, redis, cache_svc) -> dict:
@@ -264,7 +266,7 @@ async def generate(state: AgentState, *, llm, retriever, redis, cache_svc) -> di
 
     query_embedding = state.get("query_embedding")
     rag_cache_hash = state.get("rag_cache_hash")
-    if query_embedding and rag_cache_hash and cache_svc is not None:
+    if query_embedding and rag_cache_hash and cache_svc is not None and not state.get("chunk_cache_hit"):
         try:
             await cache_svc.save_answer(rag_cache_hash, answer, query_embedding)
             logger.info(
