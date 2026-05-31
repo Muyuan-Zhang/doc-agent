@@ -1,4 +1,5 @@
 """LangGraph StateGraph wiring for the M4 agent pipeline."""
+import logging
 from functools import partial
 
 from langgraph.graph import END, StateGraph
@@ -15,11 +16,21 @@ from app.agent.nodes import (
 )
 from app.agent.state import AgentState
 
+logger = logging.getLogger(__name__)
 
-def build_graph(llm, retriever, redis, cache_svc):
-    """Compile the agent graph with bound client dependencies."""
+
+def build_graph(llm, retriever, redis, cache_svc, memory_svc=None):
+    """Compile the agent graph with bound client dependencies.
+
+    When ``memory_svc`` is provided, a ``retrieve_memory`` node is inserted
+    between ``cache_lookup`` and ``query_rewrite`` on the cache-miss path,
+    and the resulting ``MemoryContext`` is available to the ``generate`` node.
+    """
     def _bind(node_fn):
         return partial(node_fn, llm=llm, retriever=retriever, redis=redis, cache_svc=cache_svc)
+
+    def _bind_memory(node_fn):
+        return partial(node_fn, memory_svc=memory_svc)
 
     g = StateGraph(AgentState)
     g.add_node("cache_lookup",      _bind(cache_lookup))
@@ -31,11 +42,30 @@ def build_graph(llm, retriever, redis, cache_svc):
     g.add_node("generate",          _bind(generate))
     g.add_node("cache_write",       _bind(cache_write))
 
+    if memory_svc is not None:
+        from app.agent.nodes import retrieve_memory
+        g.add_node("retrieve_memory", _bind_memory(retrieve_memory))
+
     def _after_lookup(state: AgentState) -> str:
-        return "stream_cached" if state["cache_hit"] else "query_rewrite"
+        if state["cache_hit"]:
+            decision = "stream_cached"
+        elif memory_svc is not None:
+            decision = "retrieve_memory"
+        else:
+            decision = "query_rewrite"
+        logger.info("graph=route job=%s from=cache_lookup to=%s cache_hit=%s", state.get("job_id"), decision, state["cache_hit"])
+        return decision
 
     g.set_entry_point("cache_lookup")
-    g.add_conditional_edges("cache_lookup", _after_lookup, ["stream_cached", "query_rewrite"])
+
+    if memory_svc is not None:
+        g.add_conditional_edges("cache_lookup", _after_lookup,
+                                ["stream_cached", "retrieve_memory", "query_rewrite"])
+        g.add_edge("retrieve_memory", "query_rewrite")
+    else:
+        g.add_conditional_edges("cache_lookup", _after_lookup,
+                                ["stream_cached", "query_rewrite"])
+
     g.add_edge("stream_cached",     "cache_write")
     g.add_edge("query_rewrite",     "retrieval")
     g.add_edge("retrieval",         "entity_extraction")

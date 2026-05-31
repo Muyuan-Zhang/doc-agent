@@ -11,6 +11,7 @@ class QueryRequest(BaseModel):
     session_id: str = Field(min_length=1, max_length=64, pattern=_SAFE_ID_PATTERN)
     query: str = Field(min_length=1, max_length=4096)
     top_k: int = Field(default=5, ge=1, le=100)
+    user_id: Optional[str] = Field(default=None, min_length=0, max_length=64, pattern=_SAFE_ID_PATTERN)
 
 
 class QueryResponse(BaseModel):

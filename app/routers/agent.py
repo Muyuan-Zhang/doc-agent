@@ -51,6 +51,7 @@ async def enqueue_query(body: QueryRequest, request: Request) -> QueryResponse:
         "session_id": body.session_id,
         "query": body.query,
         "top_k": str(body.top_k),
+        "user_id": body.user_id or "",
     })
     return QueryResponse(job_id=job_id, status="queued")
 
