@@ -46,6 +46,8 @@ class CacheEntry(BaseModel):
     approval_count: int = 0
     created_at: datetime
     approved_by: list[str] = Field(default_factory=list)
+    answer: str = ""
+    query_embedding: list[float] | None = None
 
 
 class ReviewEntry(BaseModel):

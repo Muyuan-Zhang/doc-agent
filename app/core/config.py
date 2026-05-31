@@ -6,9 +6,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class LLMSemaphoreLimits(BaseModel):
-    interactive: int = 5
-    background: int = 2
-    audit: int = 1
+    interactive: int = 50
+    background: int = 20
+    audit: int = 10
 
 
 class Settings(BaseSettings):
@@ -66,10 +66,11 @@ class Settings(BaseSettings):
 
     # M3 RAG Cache
     cache_ttl_seconds: int = 3600
-    cache_auto_approve_threshold: int = 3
+    cache_auto_approve_threshold: int = 1
     cache_rewrite_enabled: bool = True
     cache_max_pending_reviews: int = 100
     cache_api_key: str = ""  # required for approve/reject/delete; empty disables auth
+    cache_semantic_threshold: float = 0.92  # cosine similarity threshold for Layer 1 answer cache hit
     # When True, new cache entries are auto-approved without human review.
     # When False, every entry requires manual approval (current strict behavior).
     cache_auto_approve: bool = True
@@ -98,7 +99,7 @@ class Settings(BaseSettings):
     agent_max_retries: int = 3
     agent_job_ttl_seconds: int = 3600
     stream_heartbeat_interval: float = 15.0
-    agent_rate_limit_rpm: int = 20
+    agent_rate_limit_rpm: int = 200
 
 
 settings = Settings()

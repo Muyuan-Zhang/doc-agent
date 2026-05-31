@@ -18,6 +18,33 @@ logger = logging.getLogger(__name__)
 _MAX_CONTEXT_CHARS = 12_000
 
 
+async def cache_lookup(state: AgentState, *, llm, retriever, redis, cache_svc) -> dict:
+    """Embed the raw query and search for a semantic cache hit before any LLM rewrite."""
+    try:
+        embedding = await llm.embed(state["query"])
+    except Exception as exc:
+        logger.warning("cache_lookup=embed_failed error=%s — treating as miss", exc)
+        return {"cache_hit": False, "cached_answer": "", "query_embedding": None}
+
+    hit = await cache_svc.lookup_by_embedding(embedding, threshold=settings.cache_semantic_threshold)
+    if hit is not None:
+        logger.info("cache_lookup=hit hash=%s", hit.query_hash)
+        return {"cache_hit": True, "cached_answer": hit.answer, "query_embedding": embedding}
+
+    return {"cache_hit": False, "cached_answer": "", "query_embedding": embedding}
+
+
+async def stream_cached(state: AgentState, *, llm, retriever, redis, cache_svc) -> dict:
+    """Push a cached answer token-by-token to the Redis stream without calling LLM."""
+    stream_key = token_stream_key(state["job_id"])
+    answer = state["cached_answer"]
+    words = answer.split(" ")
+    for i, word in enumerate(words):
+        token = word if i == len(words) - 1 else word + " "
+        await redis.client.rpush(stream_key, token)
+    return {"answer": answer}
+
+
 async def query_rewrite(state: AgentState, *, llm, retriever, redis, cache_svc) -> dict:
     prompt = (
         "Rewrite the following search query to improve document retrieval accuracy. "
@@ -66,7 +93,8 @@ async def rerank(state: AgentState, *, llm, retriever, redis, cache_svc) -> dict
 
 
 async def generate(state: AgentState, *, llm, retriever, redis, cache_svc) -> dict:
-    raw_context = "\n\n".join(c.content for c in state["reranked_chunks"])
+    effective_chunks = state["reranked_chunks"] or state["chunks"]
+    raw_context = "\n\n".join(c.content for c in effective_chunks)
     if len(raw_context) > _MAX_CONTEXT_CHARS:
         logger.warning(
             "Context truncated from %d to %d chars for job %s",
@@ -85,7 +113,17 @@ async def generate(state: AgentState, *, llm, retriever, redis, cache_svc) -> di
     async for token in llm.stream_complete(prompt):
         tokens.append(token)
         await redis.client.rpush(stream_key, token)
-    return {"answer": "".join(tokens)}
+    answer = "".join(tokens)
+
+    query_embedding = state.get("query_embedding")
+    if query_embedding and cache_svc is not None:
+        query_hash = hashlib.sha256(state["query"].encode()).hexdigest()[:16]
+        try:
+            await cache_svc.save_answer(query_hash, answer, query_embedding)
+        except Exception as exc:
+            logger.warning("generate=save_answer_failed error=%s", exc)
+
+    return {"answer": answer}
 
 
 async def cache_write(state: AgentState, *, llm, retriever, redis, cache_svc) -> dict:

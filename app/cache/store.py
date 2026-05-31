@@ -1,5 +1,6 @@
 import logging
 
+from app.cache.quality import cosine_similarity
 from app.cache.schemas import CacheEntry, CacheStatus, validate_transition
 from app.clients.redis import RedisClient
 from app.core.config import Settings, settings as _default_settings
@@ -146,3 +147,45 @@ class RagCacheStore:
             "auto_approved": int(raw_stats.get("auto_approved", 0)),
             "pending": int(pending),
         }
+
+    async def search_by_embedding(
+        self,
+        query_embedding: list[float],
+        threshold: float,
+    ) -> "CacheEntry | None":
+        """Scan approved entries and return the best cosine-similarity match.
+
+        Returns None when no entry exceeds the threshold or has a stored
+        query_embedding.  Iterates via SCAN to avoid blocking Redis.
+        """
+        pattern = self._redis.cache_key("rag_cache", "*")
+        best_entry: CacheEntry | None = None
+        best_score: float = threshold - 1e-9  # must strictly exceed threshold
+        cursor = 0
+        while True:
+            cursor, keys = await self._redis.client.scan(
+                cursor, match=pattern, count=_SCAN_COUNT
+            )
+            for raw_key in keys:
+                key = raw_key.decode() if isinstance(raw_key, bytes) else raw_key
+                raw = await self._redis.client.get(key)
+                if raw is None:
+                    continue
+                try:
+                    entry = CacheEntry.model_validate_json(raw)
+                except Exception:
+                    continue
+                if entry.status != CacheStatus.APPROVED:
+                    continue
+                if not entry.query_embedding:
+                    continue
+                try:
+                    score = cosine_similarity(query_embedding, entry.query_embedding)
+                except ValueError:
+                    continue
+                if score > best_score:
+                    best_score = score
+                    best_entry = entry
+            if cursor == 0:
+                break
+        return best_entry

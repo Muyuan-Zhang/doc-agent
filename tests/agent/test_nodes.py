@@ -322,3 +322,148 @@ class TestCacheWrite:
 
         call_args = redis.cache_key.call_args
         assert "sess-abc" in str(call_args)
+
+
+# ---------------------------------------------------------------------------
+# cache_lookup  (new entry-point node)
+# ---------------------------------------------------------------------------
+
+class TestCacheLookup:
+    async def test_sets_cache_hit_true_when_match_found(self):
+        from datetime import datetime, timezone
+        from app.agent.nodes import cache_lookup
+        from app.cache.schemas import CacheEntry, CacheStatus
+        from app.models.chunk import ChunkSchema
+
+        entry = CacheEntry(
+            query_hash="aabb112233440000",
+            original_query="q", normalized_query="q",
+            chunks=[], status=CacheStatus.APPROVED,
+            created_at=datetime.now(tz=timezone.utc),
+            query_embedding=[1.0, 0.0],
+            answer="cached answer",
+        )
+        llm = MagicMock()
+        llm.embed = AsyncMock(return_value=[1.0, 0.0])
+        cache_svc = MagicMock()
+        cache_svc.lookup_by_embedding = AsyncMock(return_value=entry)
+
+        result = await cache_lookup(
+            _state(query="what is fastapi?"),
+            llm=llm, retriever=None, redis=None, cache_svc=cache_svc,
+        )
+
+        assert result["cache_hit"] is True
+        assert result["cached_answer"] == "cached answer"
+        assert result["query_embedding"] == [1.0, 0.0]
+
+    async def test_sets_cache_hit_false_when_no_match(self):
+        from app.agent.nodes import cache_lookup
+
+        llm = MagicMock()
+        llm.embed = AsyncMock(return_value=[0.5, 0.5])
+        cache_svc = MagicMock()
+        cache_svc.lookup_by_embedding = AsyncMock(return_value=None)
+
+        result = await cache_lookup(
+            _state(query="new question"),
+            llm=llm, retriever=None, redis=None, cache_svc=cache_svc,
+        )
+
+        assert result["cache_hit"] is False
+        assert result["cached_answer"] == ""
+        assert result["query_embedding"] == [0.5, 0.5]
+
+    async def test_embed_failure_treated_as_miss(self):
+        from app.agent.nodes import cache_lookup
+
+        llm = MagicMock()
+        llm.embed = AsyncMock(side_effect=RuntimeError("embed API down"))
+        cache_svc = MagicMock()
+
+        result = await cache_lookup(
+            _state(query="q"),
+            llm=llm, retriever=None, redis=None, cache_svc=cache_svc,
+        )
+
+        assert result["cache_hit"] is False
+        cache_svc.lookup_by_embedding.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# stream_cached  (push cached answer to Redis stream, 0 LLM calls)
+# ---------------------------------------------------------------------------
+
+class TestStreamCached:
+    async def test_pushes_cached_answer_tokens_to_redis(self):
+        from app.agent.nodes import stream_cached
+
+        redis = _make_redis_for_generate()
+        state = _state(cached_answer="Hello world", job_id="job-sc")
+
+        result = await stream_cached(state, llm=None, retriever=None, redis=redis, cache_svc=None)
+
+        assert result["answer"] == "Hello world"
+        assert redis.client.rpush.await_count >= 1
+
+    async def test_does_not_call_llm(self):
+        from app.agent.nodes import stream_cached
+
+        llm = MagicMock()
+        llm.stream_complete = AsyncMock()
+        redis = _make_redis_for_generate()
+
+        await stream_cached(
+            _state(cached_answer="answer"), llm=llm, retriever=None, redis=redis, cache_svc=None
+        )
+
+        llm.stream_complete.assert_not_called()
+
+    async def test_returns_full_answer_string(self):
+        from app.agent.nodes import stream_cached
+
+        redis = _make_redis_for_generate()
+        result = await stream_cached(
+            _state(cached_answer="The answer is 42."),
+            llm=None, retriever=None, redis=redis, cache_svc=None,
+        )
+        assert result["answer"] == "The answer is 42."
+
+
+# ---------------------------------------------------------------------------
+# generate — saves answer back via cache_svc.save_answer
+# ---------------------------------------------------------------------------
+
+class TestGenerateSavesAnswer:
+    async def test_calls_save_answer_with_query_embedding(self):
+        chunk = _chunk(content="context content")
+        llm = MagicMock()
+        llm.stream_complete = _make_stream(["great answer"])
+        redis = _make_redis_for_generate()
+        cache_svc = MagicMock()
+        cache_svc.save_answer = AsyncMock()
+        state = _state(
+            reranked_chunks=[chunk],
+            query="test q",
+            query_embedding=[1.0, 0.0],
+        )
+
+        await generate(state, llm=llm, retriever=None, redis=redis, cache_svc=cache_svc)
+
+        cache_svc.save_answer.assert_awaited_once()
+        args = cache_svc.save_answer.call_args
+        assert args.kwargs.get("answer") == "great answer" or args.args[1] == "great answer"
+        emb_arg = args.kwargs.get("query_embedding") or args.args[2]
+        assert emb_arg == [1.0, 0.0]
+
+    async def test_save_answer_not_called_when_embedding_missing(self):
+        llm = MagicMock()
+        llm.stream_complete = _make_stream(["answer"])
+        redis = _make_redis_for_generate()
+        cache_svc = MagicMock()
+        cache_svc.save_answer = AsyncMock()
+        state = _state(reranked_chunks=[], query="q", query_embedding=None)
+
+        await generate(state, llm=llm, retriever=None, redis=redis, cache_svc=cache_svc)
+
+        cache_svc.save_answer.assert_not_awaited()

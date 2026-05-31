@@ -4,12 +4,14 @@ from functools import partial
 from langgraph.graph import END, StateGraph
 
 from app.agent.nodes import (
+    cache_lookup,
     cache_write,
     entity_extraction,
     generate,
     query_rewrite,
     rerank,
     retrieval,
+    stream_cached,
 )
 from app.agent.state import AgentState
 
@@ -20,6 +22,8 @@ def build_graph(llm, retriever, redis, cache_svc):
         return partial(node_fn, llm=llm, retriever=retriever, redis=redis, cache_svc=cache_svc)
 
     g = StateGraph(AgentState)
+    g.add_node("cache_lookup",      _bind(cache_lookup))
+    g.add_node("stream_cached",     _bind(stream_cached))
     g.add_node("query_rewrite",     _bind(query_rewrite))
     g.add_node("retrieval",         _bind(retrieval))
     g.add_node("entity_extraction", _bind(entity_extraction))
@@ -27,7 +31,12 @@ def build_graph(llm, retriever, redis, cache_svc):
     g.add_node("generate",          _bind(generate))
     g.add_node("cache_write",       _bind(cache_write))
 
-    g.set_entry_point("query_rewrite")
+    def _after_lookup(state: AgentState) -> str:
+        return "stream_cached" if state["cache_hit"] else "query_rewrite"
+
+    g.set_entry_point("cache_lookup")
+    g.add_conditional_edges("cache_lookup", _after_lookup, ["stream_cached", "query_rewrite"])
+    g.add_edge("stream_cached",     "cache_write")
     g.add_edge("query_rewrite",     "retrieval")
     g.add_edge("retrieval",         "entity_extraction")
     g.add_edge("entity_extraction", "rerank")

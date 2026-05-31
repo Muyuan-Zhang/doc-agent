@@ -76,6 +76,28 @@ class RagCacheService:
 
         return chunks, False
 
+    async def lookup_by_embedding(
+        self,
+        query_embedding: list[float],
+        threshold: float,
+    ) -> "CacheEntry | None":
+        """Return an approved cache entry whose query_embedding is within threshold."""
+        return await self._store.search_by_embedding(query_embedding, threshold=threshold)
+
+    async def save_answer(
+        self,
+        query_hash: str,
+        answer: str,
+        query_embedding: list[float],
+    ) -> None:
+        """Write the generated answer and query embedding back into an existing entry."""
+        entry = await self._store.get(query_hash)
+        if entry is None:
+            return
+        updated = entry.model_copy(update={"answer": answer, "query_embedding": query_embedding})
+        ttl = await self._store._redis.client.ttl(self._store._entry_key(query_hash))
+        await self._store.set(updated, ttl if ttl > 0 else self._cfg.cache_ttl_seconds)
+
     async def _decide_status(
         self, query: str, chunks: list[ChunkSchema],
     ) -> CacheStatus:

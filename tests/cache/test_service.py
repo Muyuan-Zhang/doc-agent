@@ -401,3 +401,73 @@ class TestRagCacheServiceTopK:
             "test query", retriever, top_k=10
         )
         retriever.retrieve.assert_awaited_once_with("test query", 10)
+
+
+# ---------------------------------------------------------------------------
+# lookup_by_embedding() — semantic cache hit before query_rewrite
+# ---------------------------------------------------------------------------
+
+class TestRagCacheServiceLookupByEmbedding:
+    async def test_returns_entry_when_store_finds_match(self):
+        from datetime import datetime, timezone
+        redis, inner = _make_redis()
+        entry = CacheEntry(
+            query_hash="aabb112233440000",
+            original_query="what is fastapi?",
+            normalized_query="what is fastapi",
+            chunks=[_make_chunk()],
+            status=CacheStatus.APPROVED,
+            created_at=datetime.now(tz=timezone.utc),
+            query_embedding=[1.0, 0.0],
+            answer="FastAPI is a web framework.",
+        )
+        svc = RagCacheService(redis, _make_llm(), _make_cfg())
+        svc.store.search_by_embedding = AsyncMock(return_value=entry)
+        result = await svc.lookup_by_embedding([1.0, 0.0], threshold=0.92)
+        assert result is not None
+        assert result.answer == "FastAPI is a web framework."
+
+    async def test_returns_none_when_no_match(self):
+        redis, inner = _make_redis()
+        svc = RagCacheService(redis, _make_llm(), _make_cfg())
+        svc.store.search_by_embedding = AsyncMock(return_value=None)
+        result = await svc.lookup_by_embedding([1.0, 0.0], threshold=0.92)
+        assert result is None
+
+    async def test_passes_threshold_to_store(self):
+        redis, inner = _make_redis()
+        svc = RagCacheService(redis, _make_llm(), _make_cfg())
+        svc.store.search_by_embedding = AsyncMock(return_value=None)
+        await svc.lookup_by_embedding([0.5, 0.5], threshold=0.85)
+        svc.store.search_by_embedding.assert_awaited_once_with([0.5, 0.5], threshold=0.85)
+
+
+# ---------------------------------------------------------------------------
+# save_answer() — write answer + embedding back to approved cache entry
+# ---------------------------------------------------------------------------
+
+class TestRagCacheServiceSaveAnswer:
+    async def test_save_answer_updates_entry_with_answer_and_embedding(self):
+        from datetime import datetime, timezone
+        redis, inner = _make_redis()
+        entry = CacheEntry(
+            query_hash="deadbeefcafe0000",
+            original_query="q", normalized_query="q",
+            chunks=[_make_chunk()], status=CacheStatus.APPROVED,
+            created_at=datetime.now(tz=timezone.utc),
+        )
+        inner.get = AsyncMock(return_value=entry.model_dump_json())
+        inner.ttl = AsyncMock(return_value=3000)
+        svc = RagCacheService(redis, _make_llm(), _make_cfg())
+        await svc.save_answer("deadbeefcafe0000", "The answer is 42.", [1.0, 0.0])
+        inner.setex.assert_awaited_once()
+        stored = CacheEntry.model_validate_json(inner.setex.call_args.args[2])
+        assert stored.answer == "The answer is 42."
+        assert stored.query_embedding == [1.0, 0.0]
+
+    async def test_save_answer_noops_when_entry_missing(self):
+        redis, inner = _make_redis()
+        inner.get = AsyncMock(return_value=None)
+        svc = RagCacheService(redis, _make_llm(), _make_cfg())
+        await svc.save_answer("deadbeefcafe0000", "answer", [1.0])
+        inner.setex.assert_not_awaited()
