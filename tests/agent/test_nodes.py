@@ -128,6 +128,29 @@ class TestRetrieval:
 
         assert result["cache_hit"] is True
 
+    # Bug 1 fix: retrieval must write chunk_cache_hit, not cache_hit
+    async def test_returns_chunk_cache_hit_not_cache_hit_on_miss(self):
+        cache_svc = MagicMock()
+        cache_svc.get_or_retrieve = AsyncMock(return_value=([], False, "aabb112233440000"))
+        state = _state(rewritten_query="q")
+
+        result = await retrieval(state, llm=None, retriever=MagicMock(), redis=None, cache_svc=cache_svc)
+
+        assert "chunk_cache_hit" in result
+        assert "cache_hit" not in result
+        assert result["chunk_cache_hit"] is False
+
+    async def test_returns_chunk_cache_hit_true_on_layer2_hit(self):
+        chunk = _chunk()
+        cache_svc = MagicMock()
+        cache_svc.get_or_retrieve = AsyncMock(return_value=([chunk], True, "aabb112233440000"))
+        state = _state(rewritten_query="cached query")
+
+        result = await retrieval(state, llm=None, retriever=MagicMock(), redis=None, cache_svc=cache_svc)
+
+        assert result["chunk_cache_hit"] is True
+        assert "cache_hit" not in result
+
 
 # ---------------------------------------------------------------------------
 # entity_extraction  (pass-through placeholder)
