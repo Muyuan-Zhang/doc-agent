@@ -44,6 +44,7 @@ def _state(**overrides) -> dict:
         cached_answer="",
         query_embedding=None,
         rag_cache_hash=None,
+        chunk_cache_hit=False,
         error=None,
         user_id="",
         memory_context=None,
@@ -100,7 +101,7 @@ class TestRetrieval:
         result = await retrieval(state, llm=None, retriever=retriever, redis=None, cache_svc=cache_svc)
 
         assert result["chunks"] == [chunk]
-        assert result["cache_hit"] is False
+        assert result["chunk_cache_hit"] is False
         cache_svc.get_or_retrieve.assert_awaited_once_with("fastapi intro", retriever, top_k=3)
 
     async def test_returns_empty_list_when_nothing_found(self):
@@ -132,7 +133,30 @@ class TestRetrieval:
 
         result = await retrieval(state, llm=None, retriever=retriever, redis=None, cache_svc=cache_svc)
 
-        assert result["cache_hit"] is True
+        assert result["chunk_cache_hit"] is True
+
+    # Bug 1 fix: retrieval must write chunk_cache_hit, not cache_hit
+    async def test_returns_chunk_cache_hit_not_cache_hit_on_miss(self):
+        cache_svc = MagicMock()
+        cache_svc.get_or_retrieve = AsyncMock(return_value=([], False, "aabb112233440000"))
+        state = _state(rewritten_query="q")
+
+        result = await retrieval(state, llm=None, retriever=MagicMock(), redis=None, cache_svc=cache_svc)
+
+        assert "chunk_cache_hit" in result
+        assert "cache_hit" not in result
+        assert result["chunk_cache_hit"] is False
+
+    async def test_returns_chunk_cache_hit_true_on_layer2_hit(self):
+        chunk = _chunk()
+        cache_svc = MagicMock()
+        cache_svc.get_or_retrieve = AsyncMock(return_value=([chunk], True, "aabb112233440000"))
+        state = _state(rewritten_query="cached query")
+
+        result = await retrieval(state, llm=None, retriever=MagicMock(), redis=None, cache_svc=cache_svc)
+
+        assert result["chunk_cache_hit"] is True
+        assert "cache_hit" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -692,3 +716,21 @@ class TestGenerateMemoryContext:
         assert "[Conversation summary]" in prompt
         assert "[Recent turns]" in prompt
         assert "[User knowledge]" in prompt
+    async def test_save_answer_not_called_on_chunk_cache_hit(self):
+        chunk = _chunk(content="cached chunk")
+        llm = MagicMock()
+        llm.stream_complete = _make_stream(["answer"])
+        redis = _make_redis_for_generate()
+        cache_svc = MagicMock()
+        cache_svc.save_answer = AsyncMock()
+        state = _state(
+            chunks=[chunk],
+            query="q",
+            query_embedding=[1.0, 0.0],
+            rag_cache_hash="deadbeef00000000",
+            chunk_cache_hit=True,
+        )
+
+        await generate(state, llm=llm, retriever=None, redis=redis, cache_svc=cache_svc)
+
+        cache_svc.save_answer.assert_not_awaited()

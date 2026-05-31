@@ -471,3 +471,36 @@ class TestRagCacheServiceSaveAnswer:
         svc = RagCacheService(redis, _make_llm(), _make_cfg())
         await svc.save_answer("deadbeefcafe0000", "answer", [1.0])
         inner.setex.assert_not_awaited()
+
+    # Bug 2 fix: save_answer must not write into PENDING_REVIEW entries
+    async def test_save_answer_noops_when_entry_is_pending_review(self):
+        from datetime import datetime, timezone
+        redis, inner = _make_redis()
+        entry = CacheEntry(
+            query_hash="deadbeefcafe0000",
+            original_query="q", normalized_query="q",
+            chunks=[_make_chunk()], status=CacheStatus.PENDING_REVIEW,
+            created_at=datetime.now(tz=timezone.utc),
+        )
+        inner.get = AsyncMock(return_value=entry.model_dump_json())
+        svc = RagCacheService(redis, _make_llm(), _make_cfg())
+
+        await svc.save_answer("deadbeefcafe0000", "The answer is 42.", [1.0, 0.0])
+
+        inner.setex.assert_not_awaited()
+
+    async def test_save_answer_noops_when_entry_is_rejected(self):
+        from datetime import datetime, timezone
+        redis, inner = _make_redis()
+        entry = CacheEntry(
+            query_hash="deadbeefcafe0000",
+            original_query="q", normalized_query="q",
+            chunks=[_make_chunk()], status=CacheStatus.REJECTED,
+            created_at=datetime.now(tz=timezone.utc),
+        )
+        inner.get = AsyncMock(return_value=entry.model_dump_json())
+        svc = RagCacheService(redis, _make_llm(), _make_cfg())
+
+        await svc.save_answer("deadbeefcafe0000", "answer", [1.0, 0.0])
+
+        inner.setex.assert_not_awaited()

@@ -141,6 +141,9 @@ class RagCacheService:
             "cache=save_answer hash=%s result=writing status=%s answer_len=%d load_ms=%.1f",
             query_hash, entry.status.value, len(answer), load_ms,
         )
+        if entry.status != CacheStatus.APPROVED:
+            logger.debug("save_answer=skipped hash=%s status=%s", query_hash, entry.status.value)
+            return
         updated = entry.model_copy(update={"answer": answer, "query_embedding": query_embedding})
         ttl = await self._store.get_ttl(query_hash)
         effective_ttl = ttl if ttl > 0 else self._cfg.cache_ttl_seconds
