@@ -87,14 +87,17 @@ class MemoryService:
         query_embedding: list[float] | None = None,
     ) -> MemoryContext:
         t0 = time.perf_counter()
-        turns = await self._recent.get_turns(self._redis, session_id)
-        summary = await self._summary.get_latest_summary(self._pg, user_id, session_id)
+        turns_coro = self._recent.get_turns(self._redis, session_id)
+        summary_coro = self._summary.get_latest_summary(self._pg, user_id, session_id)
         if query_embedding is not None:
-            static_facts = await self._static.search_facts(
-                self._milvus, query_embedding, user_id
+            facts_coro = self._static.search_facts(
+                self._milvus, query_embedding, user_id,
             )
         else:
-            static_facts = await self._static.list_facts(self._pg, user_id)
+            facts_coro = self._static.list_facts(self._pg, user_id)
+        turns, summary, static_facts = await asyncio.gather(
+            turns_coro, summary_coro, facts_coro,
+        )
         elapsed = time.perf_counter() - t0
         logger.info(
             "memory=retrieve_context session=%s user=%s turns=%d has_summary=%s facts=%d elapsed=%.3fs",

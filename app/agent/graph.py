@@ -49,7 +49,7 @@ def build_graph(llm, retriever, redis, cache_svc, memory_svc=None):
     def _after_lookup(state: AgentState) -> str:
         if state["cache_hit"]:
             decision = "stream_cached"
-        elif memory_svc is not None:
+        elif memory_svc is not None and state.get("user_id"):
             decision = "retrieve_memory"
         else:
             decision = "query_rewrite"
