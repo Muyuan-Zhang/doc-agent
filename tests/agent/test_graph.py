@@ -63,6 +63,7 @@ class TestBuildGraph:
             "reranked_chunks": [],
             "answer": "",
             "cache_hit": False,
+            "chunk_cache_hit": False,
             "cached_answer": "",
             "query_embedding": None,
             "rag_cache_hash": None,
@@ -124,7 +125,7 @@ class TestBuildGraphNewTopology:
             "session_id": "s1", "job_id": "j1", "query": "q",
             "top_k": 5, "rewritten_query": "", "chunks": [],
             "reranked_chunks": [], "answer": "", "cache_hit": False,
-            "cached_answer": "", "query_embedding": None, "error": None,
+            "chunk_cache_hit": False, "cached_answer": "", "query_embedding": None, "error": None,
         })
 
         assert result["answer"] == "cached answer here"
@@ -158,7 +159,7 @@ class TestBuildGraphNewTopology:
             "session_id": "s1", "job_id": "j1", "query": "q",
             "top_k": 5, "rewritten_query": "", "chunks": [],
             "reranked_chunks": [], "answer": "", "cache_hit": False,
-            "cached_answer": "", "query_embedding": None, "error": None,
+            "chunk_cache_hit": False, "cached_answer": "", "query_embedding": None, "error": None,
         })
 
         assert result["answer"] == "generated answer"

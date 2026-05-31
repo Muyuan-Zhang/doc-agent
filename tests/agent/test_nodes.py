@@ -40,6 +40,7 @@ def _state(**overrides) -> dict:
         reranked_chunks=[],
         answer="",
         cache_hit=False,
+        chunk_cache_hit=False,
         error=None,
     )
     return {**base, **overrides}
@@ -94,7 +95,7 @@ class TestRetrieval:
         result = await retrieval(state, llm=None, retriever=retriever, redis=None, cache_svc=cache_svc)
 
         assert result["chunks"] == [chunk]
-        assert result["cache_hit"] is False
+        assert result["chunk_cache_hit"] is False
         cache_svc.get_or_retrieve.assert_awaited_once_with("fastapi intro", retriever, top_k=3)
 
     async def test_returns_empty_list_when_nothing_found(self):
@@ -126,7 +127,7 @@ class TestRetrieval:
 
         result = await retrieval(state, llm=None, retriever=retriever, redis=None, cache_svc=cache_svc)
 
-        assert result["cache_hit"] is True
+        assert result["chunk_cache_hit"] is True
 
     # Bug 1 fix: retrieval must write chunk_cache_hit, not cache_hit
     async def test_returns_chunk_cache_hit_not_cache_hit_on_miss(self):

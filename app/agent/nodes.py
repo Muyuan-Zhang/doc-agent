@@ -57,10 +57,10 @@ async def query_rewrite(state: AgentState, *, llm, retriever, redis, cache_svc) 
 
 
 async def retrieval(state: AgentState, *, llm, retriever, redis, cache_svc) -> dict:
-    chunks, cache_hit, query_hash = await cache_svc.get_or_retrieve(
+    chunks, chunk_cache_hit, query_hash = await cache_svc.get_or_retrieve(
         state["rewritten_query"], retriever, top_k=state["top_k"],
     )
-    return {"chunks": chunks, "cache_hit": cache_hit, "rag_cache_hash": query_hash}
+    return {"chunks": chunks, "chunk_cache_hit": chunk_cache_hit, "rag_cache_hash": query_hash}
 
 
 async def entity_extraction(state: AgentState, *, llm, retriever, redis, cache_svc) -> dict:

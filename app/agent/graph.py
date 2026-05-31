@@ -34,11 +34,14 @@ def build_graph(llm, retriever, redis, cache_svc):
     def _after_lookup(state: AgentState) -> str:
         return "stream_cached" if state["cache_hit"] else "query_rewrite"
 
+    def _after_retrieval(state: AgentState) -> str:
+        return "generate" if state["chunk_cache_hit"] else "entity_extraction"
+
     g.set_entry_point("cache_lookup")
     g.add_conditional_edges("cache_lookup", _after_lookup, ["stream_cached", "query_rewrite"])
     g.add_edge("stream_cached",     "cache_write")
     g.add_edge("query_rewrite",     "retrieval")
-    g.add_edge("retrieval",         "entity_extraction")
+    g.add_conditional_edges("retrieval", _after_retrieval, ["generate", "entity_extraction"])
     g.add_edge("entity_extraction", "rerank")
     g.add_edge("rerank",            "generate")
     g.add_edge("generate",          "cache_write")
