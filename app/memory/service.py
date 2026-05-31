@@ -88,11 +88,12 @@ class MemoryService:
     ) -> MemoryContext:
         turns = await self._recent.get_turns(self._redis, session_id)
         summary = await self._summary.get_latest_summary(self._pg, user_id, session_id)
-        static_facts: list[StaticFact] = []
         if query_embedding is not None:
             static_facts = await self._static.search_facts(
                 self._milvus, query_embedding, user_id
             )
+        else:
+            static_facts = await self._static.list_facts(self._pg, user_id)
         return MemoryContext(turns=turns, summary=summary, static_facts=static_facts)
 
     async def summarize_session(self, session_id: str, user_id: str) -> MemorySummary:

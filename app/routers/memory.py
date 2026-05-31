@@ -14,8 +14,8 @@ logger = logging.getLogger(__name__)
 _UUID_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 _SAFE_ID_PATTERN = r"^[a-zA-Z0-9_-]{1,64}$"
 
-_turns_rate_limit = rate_limiter("memory:turns", limit=60, window_seconds=60)
-_summarize_rate_limit = rate_limiter("memory:summarize", limit=5, window_seconds=60)
+_turns_rate_limit = rate_limiter("memory:turns", limit=600, window_seconds=60)
+_summarize_rate_limit = rate_limiter("memory:summarize", limit=50, window_seconds=60)
 
 
 class AppendTurnRequest(BaseModel):

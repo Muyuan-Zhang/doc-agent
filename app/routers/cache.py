@@ -84,7 +84,10 @@ async def approve_entry(
     entry = await svc.store.get(query_hash)
     if entry is None:
         raise HTTPException(status_code=404, detail="Cache entry not found")
-    new_status = await svc.review.approve(query_hash, body.reviewer_id)
+    try:
+        new_status = await svc.review.approve(query_hash, body.reviewer_id)
+    except ValidationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return ApproveResponse(query_hash=query_hash, status=new_status)
 
 

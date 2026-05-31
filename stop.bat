@@ -1,24 +1,18 @@
 @echo off
 setlocal EnableDelayedExpansion
 
-:: ── 1. Kill uvicorn by saved PID ────────────────────────────────────────────
 if exist .uvicorn.pid (
     set /p UPID=<.uvicorn.pid
-    echo Stopping uvicorn (PID !UPID!)...
-    taskkill /PID !UPID! /F > nul 2>&1
-    if %ERRORLEVEL% equ 0 (
-        echo uvicorn stopped.
-    ) else (
-        echo WARNING: Process !UPID! not found ^(may have already exited^).
-    )
+    echo Stopping uvicorn PID !UPID!...
+    taskkill /PID !UPID! /T /F > nul 2>&1
     del .uvicorn.pid
 ) else (
-    echo .uvicorn.pid not found. Attempting fallback via WMI process search...
-    powershell -NoProfile -Command "Get-WmiObject Win32_Process -Filter 'Name=''python.exe''' | Where-Object { $_.CommandLine -like '*uvicorn*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
-    echo Fallback complete ^(process may have already exited^).
+    echo .uvicorn.pid not found, skipping PID kill.
 )
 
-:: ── 2. Stop infrastructure ───────────────────────────────────────────────────
+echo Killing any remaining uvicorn processes...
+powershell -NoProfile -Command "Get-WmiObject Win32_Process -Filter 'Name=''python.exe''' | Where-Object { $_.CommandLine -like '*uvicorn*' } | ForEach-Object { Write-Host ('Killing PID ' + $_.ProcessId); Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+
 echo Stopping infrastructure...
 docker compose down
 if %ERRORLEVEL% neq 0 (
@@ -26,6 +20,6 @@ if %ERRORLEVEL% neq 0 (
 )
 
 echo.
-echo  doc-agent stopped.
+echo doc-agent stopped.
 
 endlocal

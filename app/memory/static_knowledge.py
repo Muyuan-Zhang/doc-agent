@@ -78,6 +78,32 @@ class StaticKnowledgeStore:
             for h in hits
         ]
 
+    async def list_facts(
+        self,
+        pg: PostgreSQLClient,
+        user_id: str,
+    ) -> list[StaticFact]:
+        """Return all static facts for a user (no embedding needed — for management UI)."""
+        async with pg.engine.begin() as conn:
+            rows = await conn.execute(
+                text("""
+                    SELECT fact_id, user_id, content, content_hash
+                    FROM memory_static_facts
+                    WHERE user_id = :user_id
+                    ORDER BY created_at DESC
+                """),
+                {"user_id": user_id},
+            )
+            return [
+                StaticFact(
+                    fact_id=str(row.fact_id),
+                    user_id=row.user_id,
+                    content=row.content,
+                    content_hash=row.content_hash,
+                )
+                for row in rows.fetchall()
+            ]
+
     async def delete_fact(
         self,
         pg: PostgreSQLClient,

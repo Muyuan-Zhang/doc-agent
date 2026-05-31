@@ -5,6 +5,7 @@ from app.cache.schemas import CacheStatus, validate_transition
 from app.cache.store import RagCacheStore
 from app.clients.redis import RedisClient
 from app.core.config import Settings, settings as _default_settings
+from app.core.exceptions import ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -89,11 +90,17 @@ class ReviewQueue:
                 await self.remove_from_queue(query_hash)
             else:
                 new_status = CacheStatus.PENDING_REVIEW
-            await self._store.update_status_under_lock(
-                query_hash, new_status,
-                approval_count=new_count,
-                approved_by=new_approved_by,
-            )
+            try:
+                await self._store.update_status_under_lock(
+                    query_hash, new_status,
+                    approval_count=new_count,
+                    approved_by=new_approved_by,
+                )
+            except ValidationError:
+                # Race: entry became APPROVED (TTL-expiry + re-creation) between
+                # the two store.get() calls inside update_status_under_lock.
+                await self.remove_from_queue(query_hash)
+                return CacheStatus.APPROVED
             return new_status
         finally:
             await self._redis.release_lock(lock_key, token)
